@@ -98,7 +98,10 @@ struct Status {
 }
 
 fn write_status(path: &Path, st: &State, tunnel: &str) {
-    let (adapters, apps) = st.sched.snapshot();
+    let (mut adapters, apps) = st.sched.snapshot();
+    if let Some((name, label)) = phone::label() {
+        adapters.iter_mut().filter(|a| a.name == name).for_each(|a| a.label = Some(label.clone()));
+    }
     let s = Status {
         pid: std::process::id(),
         updated: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
@@ -259,3 +262,4 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
     println!("Nethance is OFF.");
     std::process::exit(0); // don't wait for open flows: their routes are gone
 }
+

@@ -20,11 +20,17 @@ use crate::rndis;
 const UNIT: u32 = 7700;
 const IN_FLIGHT: usize = 8;
 
-/// The phone's adapter while it has an address, for adapters::discover().
-static ADAPTER: Mutex<Option<Adapter>> = Mutex::new(None);
+/// The phone's adapter while it has an address, and the phone's name.
+static ADAPTER: Mutex<Option<(Adapter, String)>> = Mutex::new(None);
 
+/// For adapters::discover().
 pub fn adapter() -> Option<Adapter> {
-    ADAPTER.lock().unwrap().clone()
+    ADAPTER.lock().unwrap().as_ref().map(|(a, _)| a.clone())
+}
+
+/// (adapter name, phone name), for the status file.
+pub fn label() -> Option<(String, String)> {
+    ADAPTER.lock().unwrap().as_ref().map(|(a, n)| (a.name.clone(), n.clone()))
 }
 
 /// A phone's USB link: Ethernet frames in and out.
@@ -166,7 +172,7 @@ async fn serve(mut link: Link) -> io::Result<()> {
         if current.as_ref().is_none_or(|c| (c.ip, c.mask, c.router) != (r.ip, r.mask, r.router)) {
             f.configure(r.ip, r.mask, r.router)?;
             let index = if_index(&f.name)?;
-            *ADAPTER.lock().unwrap() = Some(Adapter { name: f.name.clone(), index, ip: r.ip });
+            *ADAPTER.lock().unwrap() = Some((Adapter { name: f.name.clone(), index, ip: r.ip }, link.name.clone()));
             println!("phone: {} on {} via {}", r.ip, f.name, r.router.map_or("-".into(), |g: Ipv4Addr| g.to_string()));
         }
         // phone -> macOS until it is time to renew (half the lease)

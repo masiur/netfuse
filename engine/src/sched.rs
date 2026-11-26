@@ -93,6 +93,9 @@ pub struct AdapterStatus {
     pub total: u64,
     pub failed: u64,
     pub cooling_down: bool,
+    /// A display name when macOS has none for it (the phone's model, "HONOR DNY-NX9").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -188,6 +191,7 @@ impl Scheduler {
                 total: sl.total,
                 failed: sl.failed,
                 cooling_down: sl.down_until.is_some_and(|t| t > now),
+                label: None,
             })
             .collect();
         let mut apps: Vec<AppFlows> =
