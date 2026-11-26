@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 struct MenuView: View {
     private var monitor = AdapterMonitor.shared
     private var rules = RuleStore.shared
-    @State private var extraApps: [URL] = []
     @State private var apps: [AppEntry] = []
     @State private var isOn = EngineSwitch.isOn
     @State private var switchError: String?
@@ -19,11 +18,8 @@ struct MenuView: View {
             } else if notRunning {
                 banner("The engine is not running", button: "Reinstall") { try EngineSwitch.installIfNeeded(force: true) }
             }
-            // Side by side: the window is wide, and the app list no longer pushes everything down.
-            HStack(alignment: .top, spacing: Astryx.space(4)) {
-                section("Connections") { connections }.frame(width: 380)
-                section("Apps") { appList }.frame(width: 380)
-            }
+            section("Connections") { connections }
+            if !routed.isEmpty { section("App routes") { routedList } }
             if let msg = Updater.shared.status {
                 Text(msg).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
             }
@@ -33,11 +29,11 @@ struct MenuView: View {
             footer
         }
         .padding(Astryx.space(4))
-        .frame(width: 380 * 2 + Astryx.space(4) * 3)
+        .frame(width: 380)
         .background(Astryx.Color.body)
         .task {
             while !Task.isCancelled {
-                apps = listApps(rules: rules.rules, extra: extraApps)
+                apps = listApps(rules: rules.rules, extra: [])
                 try? await Task.sleep(for: .seconds(3))
             }
         }
@@ -192,30 +188,23 @@ struct MenuView: View {
         }
     }
 
-    @ViewBuilder private var appList: some View {
-        if apps.isEmpty {
-            emptyRow("No apps open")
-        } else {
-            let rows = VStack(spacing: 0) {
-                ForEach(Array(apps.enumerated()), id: \.element.id) { i, app in
-                    if i > 0 { Divider().overlay(Astryx.Color.border) }
-                    AppRow(app: app, policy: rules.policy(for: app.name), adapters: monitor.adapters,
-                           live: engine?.flows(for: app.name) ?? []) {
-                        rules.set($0, for: app.name)
-                        apps = listApps(rules: rules.rules, extra: extraApps)
-                    }
-                }
+    /// Apps with a route of their own; the full list lives in the details window.
+    private var routed: [AppEntry] { apps.filter { rules.policy(for: $0.name) != .combine } }
+
+    private var routedList: some View {
+        ForEach(Array(routed.enumerated()), id: \.element.id) { i, app in
+            if i > 0 { Divider().overlay(Astryx.Color.border) }
+            AppRow(app: app, policy: rules.policy(for: app.name), adapters: monitor.adapters,
+                   live: engine?.flows(for: app.name) ?? []) {
+                rules.set($0, for: app.name)
+                apps = listApps(rules: rules.rules, extra: [])
             }
-            // Rows have a fixed height, so the list can be sized exactly: up to 10 rows, then it scrolls.
-            ScrollView { rows }
-                .frame(height: CGFloat(min(apps.count, 10)) * (AppRow.height + 1) - 1)
-                .scrollBounceBehavior(.basedOnSize)
         }
     }
 
     private var footer: some View {
         HStack {
-            Button("Add app…", action: addApp).buttonStyle(AstryxButtonStyle())
+            Button("App routes…") { showDetails(DetailsFocus.routes) }.buttonStyle(AstryxButtonStyle())
             Button("Details") { showDetails(nil) }.buttonStyle(AstryxButtonStyle())
             Spacer()
             Button("Quit") { NSApp.terminate(nil) }.buttonStyle(AstryxButtonStyle())
@@ -236,16 +225,6 @@ struct MenuView: View {
             .frame(maxWidth: .infinity, alignment: .leading).padding(Astryx.space(3))
     }
 
-    private func addApp() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.application]
-        panel.directoryURL = URL(filePath: "/Applications")
-        panel.allowsMultipleSelection = true
-        NSApp.activate()
-        guard panel.runModal() == .OK else { return }
-        extraApps += panel.urls
-        apps = listApps(rules: rules.rules, extra: extraApps)
-    }
 }
 
 struct AdapterRow: View {

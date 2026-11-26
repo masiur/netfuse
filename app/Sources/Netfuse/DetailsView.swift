@@ -1,3 +1,4 @@
+import UniformTypeIdentifiers
 import AppKit
 import Charts
 import SwiftUI
@@ -7,6 +8,7 @@ import SwiftUI
 final class DetailsFocus {
     static let shared = DetailsFocus()
     static let overview = "overview"
+    static let routes = "routes" // the app routes page
     var selection: String = overview
 }
 
@@ -40,6 +42,7 @@ struct DetailsView: View {
         NavigationSplitView {
             List(selection: $focus.selection) {
                 Label("Overview", systemImage: "square.grid.2x2").tag(DetailsFocus.overview)
+                Label("App routes", systemImage: "arrow.triangle.branch").tag(DetailsFocus.routes)
                 Section("Connections") {
                     ForEach(monitor.adapters) { a in
                         SidebarRow(adapter: a, online: monitor.isOnline(a)).tag(a.id)
@@ -50,7 +53,9 @@ struct DetailsView: View {
         } detail: {
             ScrollView {
                 Group {
-                    if let a = monitor.adapters.first(where: { $0.id == focus.selection }) {
+                    if focus.selection == DetailsFocus.routes {
+                        AppRoutesPage(monitor: monitor)
+                    } else if let a = monitor.adapters.first(where: { $0.id == focus.selection }) {
                         AdapterPage(adapter: a, monitor: monitor)
                     } else {
                         OverviewPage(monitor: monitor)
@@ -85,6 +90,67 @@ private struct SidebarRow: View {
             Spacer(minLength: 0)
             Circle().fill(online ? Astryx.Color.success : Astryx.Color.textDisabled).frame(width: 7, height: 7)
         }
+    }
+}
+
+// MARK: app routes
+
+/// Every open app (and any added by hand) with the connection it may use. Moved here from the
+/// menu, which stays small.
+private struct AppRoutesPage: View {
+    var monitor: AdapterMonitor
+    private var rules = RuleStore.shared
+    @State private var extra: [URL] = []
+    @State private var apps: [AppEntry] = []
+
+    init(monitor: AdapterMonitor) { self.monitor = monitor }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Astryx.space(5)) {
+            HStack(alignment: .center) {
+                PageHeader(symbol: "arrow.triangle.branch", title: "App routes",
+                           subtitle: "Choose which connection each app may use. Apps not listed combine all.",
+                           rx: monitor.totalRx, tx: monitor.totalTx)
+            }
+            TitledCard("Apps") {
+                if apps.isEmpty {
+                    Text("No apps open").font(Astryx.Font.body).foregroundStyle(Astryx.Color.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(Astryx.space(4))
+                }
+                ForEach(Array(apps.enumerated()), id: \.element.id) { i, app in
+                    if i > 0 { Divider().overlay(Astryx.Color.border) }
+                    AppRow(app: app, policy: rules.policy(for: app.name), adapters: monitor.adapters,
+                           live: monitor.engine?.flows(for: app.name) ?? []) {
+                        rules.set($0, for: app.name)
+                        reload()
+                    }
+                }
+            }
+            HStack {
+                Button("Add app…", action: add).buttonStyle(AstryxButtonStyle())
+                if let err = rules.lastError {
+                    Text(err).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
+                }
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                reload()
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    private func reload() { apps = listApps(rules: rules.rules, extra: extra) }
+
+    private func add() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(filePath: "/Applications")
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        extra += panel.urls
+        reload()
     }
 }
 
