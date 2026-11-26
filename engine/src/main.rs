@@ -2,8 +2,12 @@
 //! per app from the menu-bar app's rules.json.
 
 mod adapters;
+mod dhcp;
+mod feth;
 mod owner;
+mod phone;
 mod relay;
+mod rndis;
 mod sched;
 mod scoped;
 mod tunnel;
@@ -23,6 +27,7 @@ const USAGE: &str = "usage:
                                      capture and route traffic until Ctrl+C, the time is up,
                                      or FILE (the app's on switch) is gone
   nethance-engine list                                       show the adapters it would use
+  nethance-engine phone                                      check an Android phone's USB tethering
   nethance-engine rules [--rules FILE]                       show the rules it would apply";
 
 const STATUS_PATH: &str = "/var/run/nethance/status.json";
@@ -123,6 +128,12 @@ async fn main() {
                 println!("{:<8} {:<16} index {}", a.name, a.ip, a.index);
             }
         }
+        Some("phone") => {
+            if let Err(e) = phone::probe().await {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("rules") => {
             println!("{}", rules_path.display());
             let mut rules: Vec<_> = load_rules(&rules_path).into_iter().collect();
@@ -166,6 +177,8 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
         scoped::restore();
         return Err(std::io::Error::other(format!("scoped routes: {e}")));
     }
+    phone::stop(); // a phone adapter left by a crash
+    tokio::spawn(phone::run());
     let tun = match tunnel::open() {
         Ok(t) => t,
         Err(e) => {
@@ -240,6 +253,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
         }
     }
     tunnel::close_routes(&name);
+    phone::stop();
     scoped::restore();
     let _ = std::fs::remove_file(&status_path);
     println!("Nethance is OFF.");

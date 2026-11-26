@@ -25,6 +25,7 @@ pub fn discover() -> Vec<Adapter> {
         .into_iter()
         .filter(|(name, _, _)| is_hardware(name) && routers.contains(name))
         .map(|(name, index, ip)| Adapter { name, index, ip })
+        .chain(crate::phone::adapter()) // an Android phone the engine drives itself
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out.dedup_by(|a, b| a.name == b.name); // one address per adapter is enough

@@ -271,6 +271,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1944426bf7d03f1d14f708785e4b33efd750b36d48a157b836b3efc15ede8e1d"
 
 [[package]]
+name = "futures-task"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
+
+[[package]]
+name = "futures-util"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
+dependencies = [
+ "futures-core",
+ "futures-task",
+ "pin-project-lite",
+ "slab",
+]
+
+[[package]]
 name = "getifaddrs"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -293,6 +311,16 @@ dependencies = [
  "r-efi",
  "rand_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "io-kit-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06d3a048d09fbb6597dbf7c69f40d14df4a49487db1487191618c893fc3b1c26"
+dependencies = [
+ "core-foundation-sys",
+ "mach2",
 ]
 
 [[package]]
@@ -327,6 +355,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a"
 dependencies = [
  "cfg-if",
+ "futures-util",
  "wasm-bindgen",
 ]
 
@@ -347,6 +376,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "linux-raw-sys"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -360,6 +395,15 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+
+[[package]]
+name = "mach2"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a1b95cd5421ec55b445b5ae102f5ea0e768de1f82bd3001e11f426c269c3aea"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "memchr"
@@ -419,8 +463,10 @@ name = "nethance-engine"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "etherparse",
  "ipstack",
  "libc",
+ "nusb",
  "serde",
  "serde_json",
  "socket2",
@@ -496,6 +542,29 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset",
+]
+
+[[package]]
+name = "nusb"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1de8b6d15f559f50760dad6c1b56fde4041f99dc96a08e55c2b41f44c7417ad9"
+dependencies = [
+ "core-foundation",
+ "core-foundation-sys",
+ "futures-core",
+ "io-kit-sys",
+ "js-sys",
+ "linux-raw-sys",
+ "log",
+ "once_cell",
+ "rustix",
+ "slab",
+ "tokio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows-sys",
 ]
 
 [[package]]
@@ -615,6 +684,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustix"
+version = "1.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
+dependencies = [
+ "bitflags",
+ "errno",
+ "libc",
+ "linux-raw-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -690,6 +772,12 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "slab"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
@@ -863,6 +951,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-bindgen-futures"
+version = "0.4.80"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e14e0327cb5368ad60ccb22d04a9827a693c95a926d8d125e9fa39e0baec501"
+dependencies = [
+ "js-sys",
+ "tokio",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "wasm-bindgen-macro"
 version = "0.2.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -892,6 +991,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b1f9c3798725016c6ee5f2f57869ec0831e8bbc0ab0310a86e787e97f41389e"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-sys"
+version = "0.3.107"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7d179596ff5ec0f6de4db64d54011bde6289cc49603d3a6e4ce3f329207ab88"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
