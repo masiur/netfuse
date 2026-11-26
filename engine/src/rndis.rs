@@ -30,6 +30,11 @@ pub fn find() -> Option<(DeviceInfo, u8, u8)> {
     })
 }
 
+/// Resets the USB device, as if it were unplugged and plugged in again.
+pub async fn reset(info: &DeviceInfo) -> io::Result<()> {
+    info.open().await?.reset().await.map_err(io::Error::from)
+}
+
 fn is_rndis_control(class: u8, sub: u8, proto: u8) -> bool {
     matches!((class, sub, proto), (0xEF, 4, 1) | (0xE0, 1, 3) | (0x02, 0x02, 0xFF))
 }

@@ -132,6 +132,12 @@ async fn main() {
             }
         }
         Some("phone") => {
+            if args.get(1).is_some_and(|a| a == "--reset") {
+                if let Some((info, _, _)) = rndis::find() {
+                    println!("resetting the phone's USB connection: {:?}", rndis::reset(&info).await);
+                    tokio::time::sleep(Duration::from_secs(4)).await;
+                }
+            }
             if let Err(e) = phone::probe().await {
                 eprintln!("error: {e}");
                 std::process::exit(1);

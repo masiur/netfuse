@@ -129,8 +129,11 @@ pub async fn probe() -> io::Result<()> {
         return Ok(());
     };
     println!("{}: RNDIS up, MAC {}", link.name, link.mac.map(|b| format!("{b:02x}")).join(":"));
-    let r = lease(&mut link, xid(), |_| {}).await?;
-    println!("lease: {} mask {} router {:?} for {} s", r.ip, r.mask, r.router, r.lease_secs);
+    let mut heard = 0;
+    match lease(&mut link, xid(), |_| heard += 1).await {
+        Ok(r) => println!("lease: {} mask {} router {:?} for {} s", r.ip, r.mask, r.router, r.lease_secs),
+        Err(e) => println!("{e}; {heard} other frames came from the phone meanwhile"),
+    }
     Ok(())
 }
 
