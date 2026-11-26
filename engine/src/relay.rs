@@ -15,19 +15,28 @@ use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 
 use crate::State;
 use crate::adapters::Adapter;
-use crate::sched::Lease;
+use crate::sched::{Lease, Route};
+use crate::sites::{Sniff, sniff};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const FAIL_COOLDOWN: Duration = Duration::from_secs(15);
 const UDP_IDLE: Duration = Duration::from_secs(60);
 const HALF_CLOSE_WAIT: Duration = Duration::from_secs(60);
 /// Per direction of a TCP flow; tokio::io::copy's 8 KB means many more small reads and writes.
+/// How long a new TCP flow may take to show which site it is for (TLS ClientHello, HTTP request).
+const PEEK_WAIT: Duration = Duration::from_millis(500);
+const PEEK_MAX: usize = 16 * 1024;
 const COPY_BUFFER: usize = 64 * 1024;
 
-pub async fn tcp(client: IpStackTcpStream, st: Arc<State>) {
+pub async fn tcp(mut client: IpStackTcpStream, st: Arc<State>) {
     let (src, dst) = (client.local_addr(), client.peer_addr());
     let app = st.app_for(true, src.port()).await;
-    let Some((upstream, lease)) = dial(&st, &app, dst, |a| tcp_connect(a, dst)).await else { return };
+    let (first, host) = if st.has_sites() && matches!(dst.port(), 80 | 443) { peek(&mut client).await } else { (Vec::new(), None) };
+    let route = st.route_for(&app, host.as_deref());
+    let Some((mut upstream, lease)) = dial(&st, &app, &route, dst, |a| tcp_connect(a, dst)).await else { return };
+    if upstream.write_all(&first).await.is_err() {
+        return;
+    }
     let (mut cr, mut cw) = tokio::io::split(client);
     let (mut ur, mut uw) = upstream.into_split();
     let meter = lease.meter.clone();
@@ -50,8 +59,15 @@ pub async fn tcp(client: IpStackTcpStream, st: Arc<State>) {
 
 pub async fn udp(mut client: IpStackUdpStream, st: Arc<State>) {
     let (src, dst) = (client.local_addr(), client.peer_addr());
+    // QUIC hides the site name, so with site rules it is refused and browsers fall back to TCP,
+    // where the name can be read. ponytail: every app loses QUIC then; read the QUIC Initial's SNI
+    // if that costs too much speed.
+    if dst.port() == 443 && st.has_sites() {
+        return;
+    }
     let app = st.app_for(false, src.port()).await;
-    let Some((sock, lease)) = dial(&st, &app, dst, |a| udp_connect(a, dst)).await else { return };
+    let route = st.route_for(&app, None);
+    let Some((sock, lease)) = dial(&st, &app, &route, dst, |a| udp_connect(a, dst)).await else { return };
     let meter = &lease.meter;
     let (mut up, mut down) = (vec![0u8; 65535], vec![0u8; 65535]);
     loop {
@@ -77,15 +93,14 @@ pub async fn udp(mut client: IpStackUdpStream, st: Arc<State>) {
 
 /// Tries the adapters the app's route allows until one connects. Link-level errors sideline the
 /// adapter for a while; a refused connection is the server's answer and is not retried.
-async fn dial<C, F, Fut>(st: &Arc<State>, app: &str, dst: SocketAddr, connect: F) -> Option<(C, Lease)>
+async fn dial<C, F, Fut>(st: &Arc<State>, app: &str, route: &Route, dst: SocketAddr, connect: F) -> Option<(C, Lease)>
 where
     F: Fn(Adapter) -> Fut,
     Fut: Future<Output = io::Result<C>>,
 {
-    let route = st.route_for(app);
     let mut tried = Vec::new();
     loop {
-        let lease = st.sched.acquire(&route, &tried, app)?;
+        let lease = st.sched.acquire(route, &tried, app)?;
         match tokio::time::timeout(CONNECT_TIMEOUT, connect(lease.adapter.clone())).await {
             Ok(Ok(c)) => return Some((c, lease)),
             Ok(Err(e)) => {
@@ -149,4 +164,24 @@ async fn udp_connect(a: Adapter, dst: SocketAddr) -> io::Result<UdpSocket> {
     let s = UdpSocket::from_std(std::net::UdpSocket::from(bound_socket(&a, Type::DGRAM, Protocol::UDP)?))?;
     s.connect(dst).await?;
     Ok(s)
+}
+
+/// The client's first bytes (sent on once the flow is dialed) and the site they name, if any.
+/// Gives up after PEEK_WAIT, or when the bytes are not TLS or HTTP.
+async fn peek(client: &mut IpStackTcpStream) -> (Vec<u8>, Option<String>) {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let deadline = tokio::time::Instant::now() + PEEK_WAIT;
+    while buf.len() < PEEK_MAX {
+        match sniff(&buf) {
+            Sniff::Host(h) => return (buf, Some(h)),
+            Sniff::None => break,
+            Sniff::NeedMore => {}
+        }
+        match tokio::time::timeout_at(deadline, client.read(&mut chunk)).await {
+            Ok(Ok(n)) if n > 0 => buf.extend_from_slice(&chunk[..n]),
+            _ => break,
+        }
+    }
+    (buf, None)
 }

@@ -10,6 +10,7 @@ mod relay;
 mod rndis;
 mod sched;
 mod scoped;
+mod sites;
 mod speedtest;
 mod tunnel;
 
@@ -42,6 +43,8 @@ pub struct State {
 #[derive(Default)]
 struct Rules {
     apps: HashMap<String, Route>,
+    /// Per-site routes (domain, route); they win over the app's.
+    sites: Vec<(String, Route)>,
     default: Route,
     disabled: Vec<String>,
     /// Keep capturing while a VPN is up (its traffic then skips the VPN). Off: step aside.
@@ -51,22 +54,33 @@ struct Rules {
 impl Rules {
     /// Some app's route names the VPN.
     fn uses_vpn(&self) -> bool {
-        self.apps.values().flatten().flatten().any(|a| a.eq_ignore_ascii_case(adapters::VPN))
+        self.apps.values().chain(self.sites.iter().map(|(_, r)| r)).flatten().flatten().any(|a| a.eq_ignore_ascii_case(adapters::VPN))
     }
 }
 
 impl State {
     /// The app behind a flow, "" when it cannot be found. Only looked up when there are rules.
     pub async fn app_for(&self, tcp: bool, port: u16) -> String {
-        if self.rules.read().unwrap().apps.is_empty() {
+        if !self.has_rules() {
             return String::new();
         }
         tokio::task::spawn_blocking(move || owner::app_for_port(tcp, port)).await.ok().flatten().unwrap_or_default()
     }
 
-    pub fn route_for(&self, app: &str) -> Route {
+    fn has_rules(&self) -> bool {
         let r = self.rules.read().unwrap();
-        r.apps.get(app).cloned().unwrap_or_else(|| r.default.clone())
+        !r.apps.is_empty() || !r.sites.is_empty()
+    }
+
+    pub fn has_sites(&self) -> bool { !self.rules.read().unwrap().sites.is_empty() }
+
+    /// A site rule for `host` first, then the app's, then the default.
+    pub fn route_for(&self, app: &str, host: Option<&str>) -> Route {
+        let r = self.rules.read().unwrap();
+        host.and_then(|h| sites::best(&r.sites, h))
+            .or_else(|| r.apps.get(app))
+            .cloned()
+            .unwrap_or_else(|| r.default.clone())
     }
 }
 
@@ -74,6 +88,9 @@ impl State {
 struct RulesFile {
     #[serde(default)]
     rules: HashMap<String, String>,
+    /// Per-site routes: {"youtube.com": "vpn"}.
+    #[serde(default)]
+    sites: HashMap<String, String>,
     /// Adapters switched off in the app: no flow uses them.
     #[serde(default)]
     disabled: Vec<String>,
@@ -103,19 +120,17 @@ fn load_rules(path: &Path) -> Rules {
             return Rules::default();
         }
     };
-    let apps = file
-        .rules
-        .into_iter()
-        .filter_map(|(app, r)| match parse_route(&r) {
-            Ok(route) if !route.is_empty() => Some((app, route)),
-            Ok(_) => None,
-            Err(e) => {
-                eprintln!("{}: {app}: {e} (skipped)", path.display());
-                None
-            }
-        })
-        .collect();
-    Rules { apps, default: order_route(&file.order), disabled: file.disabled, keep_with_vpn: file.keep_with_vpn }
+    let parse = |(name, r): (String, String)| match parse_route(&r) {
+        Ok(route) if !route.is_empty() => Some((name, route)),
+        Ok(_) => None,
+        Err(e) => {
+            eprintln!("{}: {name}: {e} (skipped)", path.display());
+            None
+        }
+    };
+    let apps = file.rules.into_iter().filter_map(parse).collect();
+    let sites = file.sites.into_iter().filter_map(|(d, r)| Some((sites::normalize(&d)?, r))).filter_map(parse).collect();
+    Rules { apps, sites, default: order_route(&file.order), disabled: file.disabled, keep_with_vpn: file.keep_with_vpn }
 }
 
 /// The menu-bar app saves rules for the user who runs it; under sudo that is SUDO_USER.
@@ -188,7 +203,7 @@ async fn main() {
             println!("{}", rules_path.display());
             let loaded = load_rules(&rules_path);
             println!("default: {}  disabled: {:?}", route_text(&loaded.default), loaded.disabled);
-            let mut rules: Vec<_> = loaded.apps.into_iter().collect();
+            let mut rules: Vec<_> = loaded.apps.into_iter().chain(loaded.sites.into_iter().map(|(d, r)| (format!("site {d}"), r))).collect();
             rules.sort();
             for (app, r) in rules {
                 println!("  {app:<24} {}", route_text(&r));
@@ -323,7 +338,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
                 mtime = m;
                 let rules = load_rules(&rules_path);
                 if tick > 0 {
-                    println!("rules reloaded ({} apps)", rules.apps.len());
+                    println!("rules reloaded ({} apps, {} sites)", rules.apps.len(), rules.sites.len());
                 }
                 bg.sched.set_disabled(rules.disabled.clone());
                 *bg.rules.write().unwrap() = rules;

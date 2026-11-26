@@ -215,3 +215,31 @@ func normalizeDomain(_ s: String) -> String? {
     d = d.trimmingCharacters(in: CharacterSet(charactersIn: "."))
     return d.isEmpty ? nil : d
 }
+
+/// Site logos: each site's own /favicon.ico, loaded once per launch. nil until loaded or when the
+/// site has none; callers fall back to a globe.
+@MainActor @Observable
+final class Favicons {
+    static let shared = Favicons()
+    private var images: [String: NSImage] = [:]
+    private var started: Set<String> = []
+
+    /// The first of `domains` that has a favicon (chatgpt.com has none, openai.com does).
+    func image(for domains: [String]) -> NSImage? {
+        guard let key = domains.first else { return nil }
+        if !started.contains(key) {
+            started.insert(key)
+            Task {
+                for d in domains {
+                    guard let url = URL(string: "https://\(d)/favicon.ico"),
+                          let (data, resp) = try? await URLSession.shared.data(from: url),
+                          (resp as? HTTPURLResponse)?.statusCode == 200,
+                          let img = NSImage(data: data), img.isValid else { continue }
+                    images[key] = img
+                    return
+                }
+            }
+        }
+        return images[key]
+    }
+}

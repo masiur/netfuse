@@ -10,6 +10,7 @@ final class DetailsFocus {
     static let shared = DetailsFocus()
     static let overview = "overview"
     static let routes = "routes" // the app routes page
+    static let sites = "sites"
     static let settings = "settings"
     static let latency = "latency"
     var selection: String = overview
@@ -45,6 +46,7 @@ struct DetailsView: View {
         NavigationSplitView {
             List(selection: $focus.selection) {
                 Label("Overview", systemImage: "square.grid.2x2").tag(DetailsFocus.overview)
+                Label("Site routes", systemImage: "globe").tag(DetailsFocus.sites)
                 Label("App routes", systemImage: "arrow.triangle.branch").tag(DetailsFocus.routes)
                 Label("Latency test", systemImage: "stopwatch").tag(DetailsFocus.latency)
                 Label("Settings", systemImage: "gearshape").tag(DetailsFocus.settings)
@@ -62,6 +64,8 @@ struct DetailsView: View {
                         LatencyPage(monitor: monitor)
                     } else if focus.selection == DetailsFocus.settings {
                         SettingsPage()
+                    } else if focus.selection == DetailsFocus.sites {
+                        SiteRoutesPage(monitor: monitor)
                     } else if focus.selection == DetailsFocus.routes {
                         AppRoutesPage(monitor: monitor)
                     } else if let a = monitor.adapters.first(where: { $0.id == focus.selection }) {
@@ -197,6 +201,98 @@ private struct SettingsPage: View {
     }
 }
 
+// MARK: site routes
+
+/// Domains with their own route. They win over app rules.
+private struct SiteRoutesPage: View {
+    var monitor: AdapterMonitor
+    private var rules = RuleStore.shared
+    @State private var newSite = ""
+
+    init(monitor: AdapterMonitor) { self.monitor = monitor }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Astryx.space(5)) {
+            PageHeader(symbol: "globe", title: "Site routes",
+                       subtitle: "Choose which connection a site uses, in any app or browser.",
+                       rx: monitor.totalRx, tx: monitor.totalTx)
+            TitledCard("Sites") {
+                Text("A site's rule wins over the app's: with youtube.com on the VPN, YouTube uses the VPN in every browser. Subdomains included. While any site has a rule, QUIC is turned off so sites can be told apart.")
+                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(Astryx.space(4))
+                ForEach(rules.sites.keys.sorted(), id: \.self) { domain in
+                    Divider().overlay(Astryx.Color.border)
+                    AppRow(app: AppEntry(name: domain, icon: logo(for: domain)),
+                           policy: rules.policy(forSite: domain), adapters: monitor.adapters, live: []) {
+                        rules.setSite($0, for: domain)
+                    }
+                }
+            }
+            HStack {
+                TextField("youtube.com", text: $newSite).textFieldStyle(.roundedBorder).frame(maxWidth: 240)
+                    .onSubmit(addSite)
+                Button("Add site", action: addSite).buttonStyle(AstryxButtonStyle())
+                    .disabled(normalizeDomain(newSite) == nil)
+            }
+            TitledCard("Popular sites") {
+                Text("One click adds every domain the service uses, set to VPN first. Change or remove each above.")
+                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding([.horizontal, .top], Astryx.space(4))
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), alignment: .leading)], spacing: Astryx.space(2)) {
+                    ForEach(Self.popular, id: \.name) { p in
+                        let added = p.domains.allSatisfy { rules.sites[$0] != nil }
+                        Button {
+                            for d in p.domains where rules.sites[d] == nil { rules.setSite(.prefer(vpnID), for: d) }
+                        } label: {
+                            HStack(spacing: Astryx.space(2)) {
+                                Image(nsImage: logo(for: p.domains[0])).resizable().frame(width: 16, height: 16)
+                                Text(p.name)
+                                if added { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)) }
+                            }
+                        }
+                        .buttonStyle(AstryxButtonStyle()).disabled(added)
+                    }
+                }
+                .padding(Astryx.space(4))
+            }
+            if let err = rules.lastError {
+                Text(err).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
+            }
+        }
+    }
+
+    /// Services and the domains they load from (video and images often come from other domains).
+    static let popular: [(name: String, domains: [String])] = [
+        ("YouTube", ["youtube.com", "googlevideo.com", "ytimg.com", "youtu.be"]),
+        ("Google", ["google.com", "gstatic.com", "googleapis.com"]),
+        ("Facebook", ["facebook.com", "fbcdn.net", "fb.com", "messenger.com"]),
+        ("Instagram", ["instagram.com", "cdninstagram.com"]),
+        ("WhatsApp", ["whatsapp.com", "whatsapp.net"]),
+        ("Netflix", ["netflix.com", "nflxvideo.net", "nflximg.net", "nflxso.net"]),
+        ("TikTok", ["tiktok.com", "tiktokcdn.com", "byteoversea.com"]),
+        ("X (Twitter)", ["x.com", "twitter.com", "twimg.com"]),
+        ("ChatGPT", ["chatgpt.com", "openai.com", "oaistatic.com"]),
+        ("Claude", ["claude.ai", "anthropic.com"]),
+        ("Spotify", ["spotify.com", "scdn.co", "spotifycdn.com"]),
+        ("Twitch", ["twitch.tv", "ttvnw.net", "jtvnw.net"]),
+    ]
+
+    /// The service's logo for a domain it uses (googlevideo.com shows YouTube's), else the site's own.
+    private func logo(for domain: String) -> NSImage {
+        let domains = Self.popular.first { $0.domains.contains(domain) }?.domains ?? [domain]
+        return Favicons.shared.image(for: domains) ?? NSImage(systemSymbolName: "globe", accessibilityDescription: nil)!
+    }
+
+    /// A new site starts as "VPN first, else the others" (the usual reason to add one); its menu
+    /// changes it, and "All connections" removes it.
+    private func addSite() {
+        guard let d = normalizeDomain(newSite), rules.sites[d] == nil else { newSite = ""; return }
+        rules.setSite(.prefer(vpnID), for: d)
+        newSite = ""
+    }
+
+}
+
 // MARK: app routes
 
 /// Every open app (and any added by hand) with the connection it may use. Moved here from the
@@ -206,7 +302,6 @@ private struct AppRoutesPage: View {
     private var rules = RuleStore.shared
     @State private var extra: [URL] = []
     @State private var apps: [AppEntry] = []
-    @State private var newSite = ""
 
     init(monitor: AdapterMonitor) { self.monitor = monitor }
 
@@ -214,7 +309,7 @@ private struct AppRoutesPage: View {
         VStack(alignment: .leading, spacing: Astryx.space(5)) {
             HStack(alignment: .center) {
                 PageHeader(symbol: "arrow.triangle.branch", title: "App routes",
-                           subtitle: "Choose which connection each app or site may use, including your VPN. Others combine all.",
+                           subtitle: "Choose which connection each app may use, including your VPN. Others combine all.",
                            rx: monitor.totalRx, tx: monitor.totalTx)
             }
             TitledCard("Apps") {
@@ -234,26 +329,6 @@ private struct AppRoutesPage: View {
             HStack {
                 Button("Add app…", action: add).buttonStyle(AstryxButtonStyle())
             }
-            TitledCard("Sites") {
-                Text("A site's rule wins over the app's: with youtube.com on the VPN, YouTube uses the VPN in every browser. Subdomains included. While any site has a rule, QUIC is turned off so sites can be told apart.")
-                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(Astryx.space(4))
-                ForEach(rules.sites.keys.sorted(), id: \.self) { domain in
-                    Divider().overlay(Astryx.Color.border)
-                    AppRow(app: AppEntry(name: domain, icon: NSImage(systemSymbolName: "globe", accessibilityDescription: nil)),
-                           policy: rules.policy(forSite: domain), adapters: monitor.adapters, live: []) {
-                        rules.setSite($0, for: domain)
-                    }
-                }
-            }
-            HStack {
-                TextField("youtube.com", text: $newSite).textFieldStyle(.roundedBorder).frame(maxWidth: 240)
-                    .onSubmit(addSite)
-                Button("Add site", action: addSite).buttonStyle(AstryxButtonStyle())
-                    .disabled(normalizeDomain(newSite) == nil)
-                Text("YouTube also needs googlevideo.com and ytimg.com.")
-                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
-            }
             if let err = rules.lastError {
                 Text(err).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
             }
@@ -264,14 +339,6 @@ private struct AppRoutesPage: View {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
-    }
-
-    /// A new site starts as "VPN first, else the others" (the usual reason to add one); its menu
-    /// changes it, and "All connections" removes it.
-    private func addSite() {
-        guard let d = normalizeDomain(newSite), rules.sites[d] == nil else { newSite = ""; return }
-        rules.setSite(.prefer(vpnID), for: d)
-        newSite = ""
     }
 
     private func reload() { apps = listApps(rules: rules.rules, extra: extra) }
