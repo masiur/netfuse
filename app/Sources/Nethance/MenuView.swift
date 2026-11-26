@@ -134,6 +134,11 @@ struct MenuView: View {
                 .onTapGesture { showDetails(a.id) }
                 .help("Show details")
         }
+        if let phone = monitor.usbPhone {
+            if !monitor.adapters.isEmpty { Divider().overlay(Astryx.Color.border) }
+            AdapterRow(adapter: Adapter(id: "USB", name: phone, kind: .android),
+                       note: isOn ? "Connecting… (is USB tethering on?)" : "Turn Nethance on to use it")
+        }
         if let iPhone = monitor.idleIPhone {
             Divider().overlay(Astryx.Color.border)
             IPhoneHint(name: iPhone)
@@ -208,6 +213,7 @@ struct MenuView: View {
 struct AdapterRow: View {
     var adapter: Adapter
     var link: EngineStatus.Link? // nil while the engine is off or not using this adapter
+    var note: String? // in place of the address line
 
     /// An Android phone's adapter has no router macOS knows of: the engine drives it, and lists it.
     private var online: Bool { adapter.hasRouter || link != nil }
@@ -224,7 +230,7 @@ struct AdapterRow: View {
                     Text(adapter.name).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
                     Text(adapter.id).font(Astryx.Font.code).foregroundStyle(Astryx.Color.textSecondary)
                 }
-                Text(detail)
+                Text(detail).lineLimit(1)
                     .font(Astryx.Font.supporting)
                     .foregroundStyle(link?.coolingDown == true ? Astryx.Color.textWarning : Astryx.Color.textSecondary)
             }
@@ -235,6 +241,7 @@ struct AdapterRow: View {
             }
             .font(Astryx.Font.supporting).monospacedDigit()
             .foregroundStyle(Astryx.Color.textSecondary)
+            .opacity(note == nil ? 1 : 0) // no traffic to show; kept for the row's height
             Circle().fill(!online ? Astryx.Color.textDisabled
                           : link?.coolingDown == true ? Astryx.Color.textWarning : Astryx.Color.success)
                 .frame(width: 8, height: 8)
@@ -244,6 +251,7 @@ struct AdapterRow: View {
     }
 
     private var detail: String {
+        if let note { return note }
         guard online else { return "No internet" }
         let ip = adapter.ipv4 ?? "IPv6 only"
         guard let link else { return ip }

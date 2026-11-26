@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Observation
+import IOKit
 import SystemConfiguration
 
 /// One network adapter that can carry internet traffic: Wi-Fi, Ethernet, a phone tether.
@@ -54,6 +55,10 @@ final class AdapterMonitor {
     /// An iPhone plugged in over USB that gives no internet (Personal Hotspot off, or macOS keeping
     /// it down "unless needed"): its display name, for the menu's hint.
     private(set) var idleIPhone: String?
+    /// An Android phone with USB tethering on that is not an adapter yet (Nethance is off, or the
+    /// engine is still connecting): its name. Listing it keeps the menu from jumping on/off.
+    private(set) var usbPhone: String?
+    private var usbPhones: [String] = []
     private var last: (time: Date, counters: [String: (rx: UInt32, tx: UInt32)])?
     private var names: [String: (String, Adapter.Kind)] = [:]
     private var tick = 0
@@ -79,7 +84,10 @@ final class AdapterMonitor {
     }
 
     func refresh() {
-        if tick % 5 == 0 || names.isEmpty { names = Self.displayNames() } // slow-changing, slower to ask
+        if tick % 5 == 0 || names.isEmpty { // slow-changing, slower to ask
+            names = Self.displayNames()
+            usbPhones = Self.rndisPhones()
+        }
         tick += 1
         let routers = Self.routers()
         let now = Date()
@@ -104,6 +112,7 @@ final class AdapterMonitor {
         idleIPhone = names.first { bsd, n in
             n.1 == .iPhone && !out.contains { $0.id == bsd } && if_nametoindex(bsd) != 0
         }?.value.0
+        usbPhone = out.contains { $0.id.hasPrefix("feth") } ? nil : usbPhones.first
         adapters = out.sorted { ($0.hasRouter ? 0 : 1, $0.id) < ($1.hasRouter ? 0 : 1, $1.id) }
     }
 
@@ -127,6 +136,30 @@ final class AdapterMonitor {
     /// Same filter as the engine: real hardware is enN; TetherKit's Android tethers are fethN.
     static func isHardware(_ bsd: String) -> Bool {
         bsd.wholeMatch(of: /(en|feth)\d+/) != nil
+    }
+
+    /// USB devices offering RNDIS (Android USB tethering), by name: what the engine drives.
+    private static func rndisPhones() -> [String] {
+        var it: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOUSBHostInterface"), &it) == KERN_SUCCESS
+        else { return [] }
+        defer { IOObjectRelease(it) }
+        func prop(_ e: io_registry_entry_t, _ key: String) -> Any? {
+            IORegistryEntryCreateCFProperty(e, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+        }
+        var out: [String] = []
+        while case let s = IOIteratorNext(it), s != 0 {
+            defer { IOObjectRelease(s) }
+            let c = prop(s, "bInterfaceClass") as? Int, sub = prop(s, "bInterfaceSubClass") as? Int, p = prop(s, "bInterfaceProtocol") as? Int
+            // same classes as the engine's rndis::find
+            guard (c, sub, p) == (0xEF, 4, 1) || (c, sub, p) == (0xE0, 1, 3) || (c, sub, p) == (0x02, 0x02, 0xFF) else { continue }
+            var device: io_registry_entry_t = 0
+            guard IORegistryEntryGetParentEntry(s, kIOServicePlane, &device) == KERN_SUCCESS else { continue }
+            defer { IOObjectRelease(device) }
+            let name = [prop(device, "USB Vendor Name"), prop(device, "USB Product Name")].compactMap { $0 as? String }.joined(separator: " ")
+            out.append(name.isEmpty ? "Android phone" : name)
+        }
+        return out
     }
 
     static func fallbackName(_ bsd: String) -> (String, Adapter.Kind) {
