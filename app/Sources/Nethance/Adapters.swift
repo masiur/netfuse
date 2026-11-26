@@ -51,6 +51,9 @@ final class AdapterMonitor {
     private(set) var totals: [String: (rx: Double, tx: Double)] = [:] // bytes since the app started
     private(set) var engine: EngineStatus?
     private(set) var publicInfo: [String: PublicInfo] = [:]
+    /// An iPhone plugged in over USB that gives no internet (Personal Hotspot off, or macOS keeping
+    /// it down "unless needed"): its display name, for the menu's hint.
+    private(set) var idleIPhone: String?
     private var last: (time: Date, counters: [String: (rx: UInt32, tx: UInt32)])?
     private var names: [String: (String, Adapter.Kind)] = [:]
     private var tick = 0
@@ -98,6 +101,9 @@ final class AdapterMonitor {
             out.append(a)
         }
         last = (now, snap.mapValues { ($0.rx, $0.tx) })
+        idleIPhone = names.first { bsd, n in
+            n.1 == .iPhone && !out.contains { $0.id == bsd } && if_nametoindex(bsd) != 0
+        }?.value.0
         adapters = out.sorted { ($0.hasRouter ? 0 : 1, $0.id) < ($1.hasRouter ? 0 : 1, $1.id) }
     }
 

@@ -53,6 +53,18 @@ enum EngineSwitch {
 
     static var isOn: Bool { FileManager.default.fileExists(atPath: flag.path) }
 
+    /// The engine inside the app differs from the installed one (the app was updated).
+    static var updateReady: Bool {
+        guard let engine = bundledEngine, FileManager.default.fileExists(atPath: plist) else { return false }
+        return !FileManager.default.contentsEqual(atPath: engine.path, andPath: installedBinary)
+    }
+
+    private static var bundledEngine: URL? {
+        Bundle.main.resourceURL.map { $0.appending(path: "nethance-engine") }.flatMap {
+            FileManager.default.fileExists(atPath: $0.path) ? $0 : nil
+        }
+    }
+
     /// When it was switched on (the flag's age), to tell "starting" from "failed to start".
     static var onSince: Date? {
         (try? FileManager.default.attributesOfItem(atPath: flag.path))?[.modificationDate] as? Date
@@ -69,13 +81,15 @@ enum EngineSwitch {
         try Data().write(to: flag)
     }
 
-    private static func installIfNeeded() throws {
+    /// Installs the bundled engine unless the same one is installed; `force` reinstalls anyway
+    /// (it is installed but not running, e.g. launchd did not load it).
+    static func installIfNeeded(force: Bool = false) throws {
         guard let res = Bundle.main.resourceURL,
               case let engine = res.appending(path: "nethance-engine"), case let script = res.appending(path: "install-engine.sh"),
               FileManager.default.fileExists(atPath: engine.path)
         else { throw Failure("The engine is not inside this copy of Nethance. Build it with scripts/bundle.sh.") }
         let fm = FileManager.default
-        if fm.fileExists(atPath: plist), fm.contentsEqual(atPath: engine.path, andPath: installedBinary) { return }
+        if !force, fm.fileExists(atPath: plist), fm.contentsEqual(atPath: engine.path, andPath: installedBinary) { return }
         // AppleScript's own quoting, so paths with spaces or quotes stay one argument.
         func lit(_ s: String) -> String {
             "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""

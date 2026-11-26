@@ -9,10 +9,16 @@ struct MenuView: View {
     @State private var apps: [AppEntry] = []
     @State private var isOn = EngineSwitch.isOn
     @State private var switchError: String?
+    @State private var updateReady = EngineSwitch.updateReady
 
     var body: some View {
         VStack(alignment: .leading, spacing: Astryx.space(4)) {
             header
+            if updateReady {
+                banner("A new engine is ready", button: "Install update") { try EngineSwitch.installIfNeeded() }
+            } else if notRunning {
+                banner("The engine is not running", button: "Reinstall") { try EngineSwitch.installIfNeeded(force: true) }
+            }
             section("Connections") { connections }
             section("Apps") { appList }
             if let err = switchError ?? rules.lastError {
@@ -32,6 +38,7 @@ struct MenuView: View {
         .task {
             while !Task.isCancelled {
                 isOn = EngineSwitch.isOn
+                updateReady = EngineSwitch.updateReady
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -78,9 +85,30 @@ struct MenuView: View {
         }
     }
 
-    private func flip(_ on: Bool) {
+    /// Switched on, but the engine has not written its status for a while.
+    private var notRunning: Bool {
+        guard isOn, engine == nil, let since = EngineSwitch.onSince else { return false }
+        return Date().timeIntervalSince(since) > 15
+    }
+
+    private func banner(_ text: String, button: String, action: @escaping () throws -> Void) -> some View {
+        HStack(spacing: Astryx.space(2)) {
+            Image(systemName: "arrow.down.circle").foregroundStyle(Astryx.Color.textPrimary)
+            Text(text).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
+            Spacer()
+            Button(button) {
+                run(action)
+            }
+            .buttonStyle(AstryxButtonStyle(primary: true))
+        }
+        .padding(Astryx.space(3))
+        .background(Astryx.Color.card, in: RoundedRectangle(cornerRadius: Astryx.Radius.container))
+        .overlay(RoundedRectangle(cornerRadius: Astryx.Radius.container).strokeBorder(Astryx.Color.border))
+    }
+
+    private func run(_ action: () throws -> Void) {
         do {
-            try EngineSwitch.set(on)
+            try action()
             switchError = nil
         } catch let e as EngineSwitch.Failure {
             switchError = e.message
@@ -88,6 +116,11 @@ struct MenuView: View {
             switchError = error.localizedDescription
         }
         isOn = EngineSwitch.isOn
+        updateReady = EngineSwitch.updateReady
+    }
+
+    private func flip(_ on: Bool) {
+        run { try EngineSwitch.set(on) }
     }
 
     @ViewBuilder private var connections: some View {
@@ -101,8 +134,12 @@ struct MenuView: View {
                 .onTapGesture { showDetails(a.id) }
                 .help("Show details")
         }
+        if let iPhone = monitor.idleIPhone {
+            Divider().overlay(Astryx.Color.border)
+            IPhoneHint(name: iPhone)
+        }
         let online = monitor.adapters.filter(monitor.isOnline).count
-        if online == 1 {
+        if online == 1 && monitor.idleIPhone == nil {
             Divider().overlay(Astryx.Color.border)
             Text("Connect a second internet source to combine: Ethernet, or a phone over USB with Personal Hotspot or USB tethering on.")
                 .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
@@ -271,4 +308,34 @@ struct AppRow: View {
     private func name(_ id: String) -> String { adapters.first { $0.id == id }?.name ?? id }
 
     private var label: String { policy.text(name) }
+}
+
+/// An iPhone is plugged in but gives no internet. macOS keeps "iPhone USB" down unless nothing else
+/// is online ("Disable unless needed"), which is never the case while combining; only the user
+/// can switch that off, in Network settings.
+private struct IPhoneHint: View {
+    var name: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Astryx.space(3)) {
+            Image(systemName: "iphone")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Astryx.Color.textDisabled)
+                .frame(width: 28, height: 28)
+                .background(Astryx.Color.muted, in: RoundedRectangle(cornerRadius: Astryx.Radius.inner))
+            VStack(alignment: .leading, spacing: Astryx.space(2)) {
+                Text("\(name) is connected but not sharing internet")
+                    .font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
+                Text("Turn on Personal Hotspot on the iPhone. Then in Network settings, open \(name), click Details… and turn off “Disable unless needed”.")
+                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Network Settings") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Network-Settings.extension")!)
+                }
+                .buttonStyle(AstryxButtonStyle())
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Astryx.space(3))
+    }
 }

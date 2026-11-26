@@ -12,6 +12,10 @@ BIN=/Library/PrivilegedHelperTools/$LABEL
 PLIST=/Library/LaunchDaemons/$LABEL.plist
 
 launchctl bootout "system/$LABEL" 2>/dev/null || true # stops a running engine; it cleans up its routes
+# bootout returns before the engine has exited, and loading it again until then fails
+# ("Bootstrap failed: 5: Input/output error"): wait up to 10 s for it to go.
+i=0
+while launchctl print "system/$LABEL" >/dev/null 2>&1 && [ $i -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
 if [ "${1:-}" = --uninstall ]; then
     rm -f "$BIN" "$PLIST"
     exit 0
@@ -49,5 +53,9 @@ EOF
 chown root:wheel "$PLIST"
 chmod 644 "$PLIST"
 plutil -lint "$PLIST" >/dev/null
-launchctl bootstrap system "$PLIST"
+for _ in 1 2 3 4 5; do
+    launchctl bootstrap system "$PLIST" 2>/dev/null && break
+    sleep 1
+done
+launchctl print "system/$LABEL" >/dev/null 2>&1 || { launchctl bootstrap system "$PLIST"; exit 1; } # shows why
 echo "installed $LABEL"
