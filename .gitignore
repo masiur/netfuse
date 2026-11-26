@@ -1,0 +1,8 @@
+.DS_Store
+# local prototypes and builds, not part of the project
+nethance-core/
+nethance-bin/
+app/.build/
+app/build/
+app/.swiftpm/
+engine/target/
