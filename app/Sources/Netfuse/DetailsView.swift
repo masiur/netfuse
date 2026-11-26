@@ -11,6 +11,7 @@ final class DetailsFocus {
     static let overview = "overview"
     static let routes = "routes" // the app routes page
     static let settings = "settings"
+    static let latency = "latency"
     var selection: String = overview
 }
 
@@ -45,6 +46,7 @@ struct DetailsView: View {
             List(selection: $focus.selection) {
                 Label("Overview", systemImage: "square.grid.2x2").tag(DetailsFocus.overview)
                 Label("App routes", systemImage: "arrow.triangle.branch").tag(DetailsFocus.routes)
+                Label("Latency test", systemImage: "stopwatch").tag(DetailsFocus.latency)
                 Label("Settings", systemImage: "gearshape").tag(DetailsFocus.settings)
                 Section("Connections") {
                     ForEach(monitor.adapters) { a in
@@ -56,7 +58,9 @@ struct DetailsView: View {
         } detail: {
             ScrollView {
                 Group {
-                    if focus.selection == DetailsFocus.settings {
+                    if focus.selection == DetailsFocus.latency {
+                        LatencyPage(monitor: monitor)
+                    } else if focus.selection == DetailsFocus.settings {
                         SettingsPage()
                     } else if focus.selection == DetailsFocus.routes {
                         AppRoutesPage(monitor: monitor)
@@ -505,7 +509,7 @@ private struct Hero: View {
 }
 
 /// A titled card, like the menu's sections.
-private struct TitledCard<Content: View>: View {
+struct TitledCard<Content: View>: View {
     var title: String
     @ViewBuilder var content: Content
     init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }

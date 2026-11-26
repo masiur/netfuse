@@ -99,3 +99,9 @@ import Testing
     #expect(r?.id == "en0")
     #expect(r?.reason.hasPrefix("3.0× faster than Ethernet") == true)
 }
+
+@Test func parsesPingSummary() {
+    let out = "--- 1.1.1.1 ping statistics ---\n4 packets transmitted, 3 packets received, 25.0% packet loss\nround-trip min/avg/max/stddev = 33.067/55.135/77.203/22.068 ms\n"
+    #expect(Probe.parsePing(out) == .ms(55.135, loss: 25))
+    #expect(Probe.parsePing("4 packets transmitted, 0 packets received, 100.0% packet loss\n") == nil)
+}
