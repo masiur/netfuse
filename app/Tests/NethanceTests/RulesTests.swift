@@ -51,3 +51,10 @@ import Testing
     #expect(s.flows(for: "curl").map(\.adapter) == ["en10", "en0"])
     #expect(EngineStatus.decode(json, now: Date(timeIntervalSince1970: 1010)) == nil) // stale: engine stopped
 }
+
+@Test func readsTheProviderFromIpinfo() throws {
+    let json = Data(#"{"ip":"115.127.217.90","city":"Dhaka","country":"BD","org":"AS24342 BRACNet Limited"}"#.utf8)
+    let p = try #require(PublicInfo.parse(json, localIP: "10.0.0.2"))
+    #expect((p.ip, p.isp, p.place) == ("115.127.217.90", "BRACNet Limited", "Dhaka, BD"))
+    #expect(PublicInfo.parse(Data("rate limited".utf8), localIP: nil) == nil)
+}

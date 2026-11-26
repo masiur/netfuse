@@ -25,6 +25,10 @@ enum Astryx {
         static let textError = dynamic(0xC0262C, 0xFFAEA7)
         static let errorMuted = dynamic(0xFFC4BE, 0xFF9890, alpha: (1, 0.24))
         static let neutralChip = dynamic(0x000000, 0xFFFFFF, alpha: (0.06, 0.10))
+        // Chart series: categorical slots 1 and 2, checked for colour-blind separation and 3:1
+        // contrast on the card surface in both modes.
+        static let download = dynamic(0x2A78D6, 0x3987E5)
+        static let upload = dynamic(0xEB6834, 0xD95926)
     }
 
     enum Radius {

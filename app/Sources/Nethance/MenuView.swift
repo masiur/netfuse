@@ -3,11 +3,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MenuView: View {
-    @State private var monitor = AdapterMonitor()
+    private var monitor = AdapterMonitor.shared
     @State private var rules = RuleStore()
     @State private var extraApps: [URL] = []
     @State private var apps: [AppEntry] = []
-    @State private var engine = EngineStatus.read()
     @State private var isOn = EngineSwitch.isOn
     @State private var switchError: String?
 
@@ -24,7 +23,6 @@ struct MenuView: View {
         .padding(Astryx.space(4))
         .frame(width: 380)
         .background(Astryx.Color.body)
-        .task { await monitor.run() }
         .task {
             while !Task.isCancelled {
                 apps = listApps(rules: rules.rules, extra: extraApps)
@@ -33,11 +31,17 @@ struct MenuView: View {
         }
         .task {
             while !Task.isCancelled {
-                engine = EngineStatus.read() // rewritten by the engine every second
                 isOn = EngineSwitch.isOn
                 try? await Task.sleep(for: .seconds(1))
             }
         }
+    }
+
+    private var engine: EngineStatus? { monitor.engine }
+
+    /// Opens the details window, scrolled to one adapter's card (nil: the top).
+    private func showDetails(_ adapter: String?) {
+        DetailsView.show(focus: adapter)
     }
 
     // MARK: sections
@@ -90,11 +94,14 @@ struct MenuView: View {
         ForEach(Array(monitor.adapters.enumerated()), id: \.element.id) { i, a in
             if i > 0 { Divider().overlay(Astryx.Color.border) }
             AdapterRow(adapter: a, link: engine?.link(a.id))
+                .contentShape(Rectangle())
+                .onTapGesture { showDetails(a.id) }
+                .help("Show details")
         }
-        let online = monitor.adapters.filter(\.hasRouter).count
+        let online = monitor.adapters.filter(monitor.isOnline).count
         if online == 1 {
             Divider().overlay(Astryx.Color.border)
-            Text("Connect a second internet source to combine: Ethernet, an iPhone over USB, or an Android phone through TetherKit.")
+            Text("Connect a second internet source to combine: Ethernet, or a phone over USB with Personal Hotspot or USB tethering on.")
                 .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -126,6 +133,7 @@ struct MenuView: View {
     private var footer: some View {
         HStack {
             Button("Add app…", action: addApp).buttonStyle(AstryxButtonStyle())
+            Button("Details") { showDetails(nil) }.buttonStyle(AstryxButtonStyle())
             Spacer()
             Button("Quit") { NSApp.terminate(nil) }.buttonStyle(AstryxButtonStyle())
         }
@@ -161,11 +169,14 @@ struct AdapterRow: View {
     var adapter: Adapter
     var link: EngineStatus.Link? // nil while the engine is off or not using this adapter
 
+    /// An Android phone's adapter has no router macOS knows of: the engine drives it, and lists it.
+    private var online: Bool { adapter.hasRouter || link != nil }
+
     var body: some View {
         HStack(spacing: Astryx.space(3)) {
-            Image(systemName: symbol)
+            Image(systemName: adapter.symbol)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(adapter.hasRouter ? Astryx.Color.textPrimary : Astryx.Color.textDisabled)
+                .foregroundStyle(online ? Astryx.Color.textPrimary : Astryx.Color.textDisabled)
                 .frame(width: 28, height: 28)
                 .background(Astryx.Color.muted, in: RoundedRectangle(cornerRadius: Astryx.Radius.inner))
             VStack(alignment: .leading, spacing: 0) {
@@ -184,7 +195,7 @@ struct AdapterRow: View {
             }
             .font(Astryx.Font.supporting).monospacedDigit()
             .foregroundStyle(Astryx.Color.textSecondary)
-            Circle().fill(!adapter.hasRouter ? Astryx.Color.textDisabled
+            Circle().fill(!online ? Astryx.Color.textDisabled
                           : link?.coolingDown == true ? Astryx.Color.textWarning : Astryx.Color.success)
                 .frame(width: 8, height: 8)
         }
@@ -193,21 +204,11 @@ struct AdapterRow: View {
     }
 
     private var detail: String {
-        guard adapter.hasRouter else { return "No internet" }
+        guard online else { return "No internet" }
         let ip = adapter.ipv4 ?? "IPv6 only"
         guard let link else { return ip }
         if link.coolingDown { return "\(ip) · link failed, retrying soon" }
         return "\(ip) · \(link.active) open"
-    }
-
-    private var symbol: String {
-        switch adapter.kind {
-        case .wifi: "wifi"
-        case .ethernet: "cable.connector"
-        case .iPhone, .android: "iphone"
-        case .bluetooth: "dot.radiowaves.left.and.right"
-        case .other: "network"
-        }
     }
 }
 
