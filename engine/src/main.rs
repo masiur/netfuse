@@ -19,8 +19,9 @@ use serde::{Deserialize, Serialize};
 use sched::{Route, Scheduler, parse_route, route_text};
 
 const USAGE: &str = "usage:
-  sudo nethance-engine run [--rules FILE] [--status FILE] [--for SECONDS]
-                                                             capture and route traffic until Ctrl+C
+  sudo nethance-engine run [--rules FILE] [--status FILE] [--for SECONDS] [--while FILE]
+                                     capture and route traffic until Ctrl+C, the time is up,
+                                     or FILE (the app's on switch) is gone
   nethance-engine list                                       show the adapters it would use
   nethance-engine rules [--rules FILE]                       show the rules it would apply";
 
@@ -133,7 +134,7 @@ async fn main() {
         Some("run") => {
             let status = flag(&args, "--status").unwrap_or_else(|| PathBuf::from(STATUS_PATH));
             let limit = flag(&args, "--for").and_then(|p| p.to_str()?.parse().ok()).map(Duration::from_secs);
-            if let Err(e) = run(rules_path, status, limit).await {
+            if let Err(e) = run(rules_path, status, limit, flag(&args, "--while")).await {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
@@ -145,7 +146,7 @@ async fn main() {
     }
 }
 
-async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>) -> std::io::Result<()> {
+async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>, on_flag: Option<PathBuf>) -> std::io::Result<()> {
     if unsafe { libc::geteuid() } != 0 {
         return Err(std::io::Error::other("needs root: sudo nethance-engine run"));
     }
@@ -182,10 +183,16 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>)
     let bg = st.clone();
     let tun_name = name.clone();
     let status_for_bg = status_path.clone();
+    let switched_off = Arc::new(tokio::sync::Notify::new());
+    let off = switched_off.clone();
     tokio::spawn(async move {
         let mut mtime = None;
         let mut tick = 0u64;
         loop {
+            if on_flag.as_ref().is_some_and(|f| !f.exists()) {
+                off.notify_one();
+                return;
+            }
             if tick % 3 == 0 {
                 bg.sched.update(adapters::discover());
                 if let Err(e) = scoped::sync() {
@@ -210,6 +217,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>)
     let mut cfg = IpStackConfig::default();
     cfg.mtu(tunnel::MTU).map_err(std::io::Error::other)?;
     let mut stack = IpStack::new(cfg, tun.io);
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let stop_at = tokio::time::Instant::now() + limit.unwrap_or(Duration::from_secs(1 << 40));
     loop {
         tokio::select! {
@@ -220,6 +228,11 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>)
                 Err(e) => { eprintln!("stack: {e}"); break; }
             },
             _ = tokio::signal::ctrl_c() => break,
+            _ = sigterm.recv() => break,
+            _ = switched_off.notified() => {
+                println!("switched off in the app");
+                break;
+            }
             _ = tokio::time::sleep_until(stop_at), if limit.is_some() => {
                 println!("--for time is up");
                 break;
