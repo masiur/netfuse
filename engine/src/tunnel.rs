@@ -20,6 +20,14 @@ pub const MTU: u16 = 9000;
 const TUN_IP: Ipv4Addr = Ipv4Addr::new(198, 18, 123, 1);
 const ROUTES: [&str; 2] = ["0.0.0.0/1", "128.0.0.0/1"];
 
+/// IPv6 is not routed by the engine, so while it runs IPv6 is refused instead: a connect fails at
+/// once and apps fall back to IPv4, which the engine routes. Left alone, IPv6 would leave through
+/// whichever adapter has it and ignore every rule. (Link-local, multicast and loopback have more
+/// specific routes and keep working.)
+/// ponytail: no IPv6 while on; route it like IPv4 (utun v6 address, v6 dials) when someone needs it.
+/// These go via lo0, so unlike the utun's routes they survive a crash: open() clears leftovers.
+const REJECT6: [&str; 2] = ["::", "8000::"];
+
 pub struct Tunnel {
     pub io: TunIo,
     pub name: String,
@@ -31,13 +39,23 @@ pub fn open() -> io::Result<Tunnel> {
     for net in ROUTES {
         route(&["add", "-net", net, "-interface", &name])?;
     }
+    for net in REJECT6 {
+        let _ = route(&["delete", "-inet6", "-net", net, "-prefixlen", "1"]); // left by a crash
+        if let Err(e) = route(&["add", "-inet6", "-net", net, "-prefixlen", "1", "::1", "-reject"]) {
+            close_routes(&name);
+            return Err(e);
+        }
+    }
     Ok(Tunnel { io: TunIo(dev), name })
 }
 
-/// Removes the routes. Closing the utun would too; doing it first makes stopping instant.
+/// Removes the routes. Closing the utun would remove its own; doing it first makes stopping instant.
 pub fn close_routes(name: &str) {
     for net in ROUTES {
         let _ = route(&["delete", "-net", net, "-interface", name]);
+    }
+    for net in REJECT6 {
+        let _ = route(&["delete", "-inet6", "-net", net, "-prefixlen", "1"]);
     }
 }
 
