@@ -42,12 +42,16 @@ import Testing
 @Test func readsTheEngineStatus() throws {
     let json = Data("""
     {"pid": 1, "updated": 1000, "tunnel": "utun9",
-     "adapters": [{"name": "en0", "ip": "10.0.0.2", "active": 3, "total": 9, "failed": 1, "cooling_down": true}],
+     "adapters": [{"name": "en0", "ip": "10.0.0.2", "active": 3, "total": 9, "failed": 1, "cooling_down": true},
+                  {"name": "feth7700", "ip": "172.23.226.192", "active": 1, "total": 1, "failed": 0, "cooling_down": false,
+                   "label": "HONOR DNY-NX9"}],
      "apps": [{"app": "curl", "adapter": "en0", "flows": 1}, {"app": "curl", "adapter": "en10", "flows": 4}]}
     """.utf8)
     let s = try #require(EngineStatus.decode(json, now: Date(timeIntervalSince1970: 1002)))
     #expect(s.link("en0")?.active == 3)
     #expect(s.link("en0")?.coolingDown == true)
+    #expect(s.link("en0")?.label == nil)
+    #expect(s.link("feth7700")?.label == "HONOR DNY-NX9")
     #expect(s.flows(for: "curl").map(\.adapter) == ["en10", "en0"])
     #expect(EngineStatus.decode(json, now: Date(timeIntervalSince1970: 1010)) == nil) // stale: engine stopped
 }

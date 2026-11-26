@@ -83,7 +83,8 @@ final class AdapterMonitor {
         let snap = Self.snapshot()
         var out: [Adapter] = []
         for (bsd, s) in snap where Self.isHardware(bsd) && (s.ipv4 != nil || routers[bsd] != nil) {
-            let (name, kind) = names[bsd] ?? Self.fallbackName(bsd)
+            var (name, kind) = names[bsd] ?? Self.fallbackName(bsd)
+            if let label = engine?.link(bsd)?.label { name = label }
             var a = Adapter(id: bsd, name: name, kind: kind, ipv4: s.ipv4, router: routers[bsd], mac: s.mac, linkSpeed: s.speed)
             if let last, let prev = last.counters[bsd] {
                 let dt = now.timeIntervalSince(last.time)

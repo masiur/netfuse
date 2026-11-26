@@ -50,6 +50,8 @@ final class RuleStore {
         load()
     }
 
+    static let shared = RuleStore()
+
     static var defaultURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Nethance/rules.json")
@@ -124,4 +126,16 @@ func listApps(rules: [String: Policy], extra: [URL]) -> [AppEntry] {
         seen[name] = AppEntry(name: name, icon: nil)
     }
     return seen.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+}
+
+extension Policy {
+    /// "Only Wi-Fi", "Wi-Fi first", with adapter names from `name`.
+    func text(_ name: (String) -> String) -> String {
+        switch self {
+        case .combine: "All connections"
+        case .only(let a): "Only \(name(a))"
+        case .prefer(let a): "\(name(a)) first"
+        case .custom(let r): r
+        }
+    }
 }

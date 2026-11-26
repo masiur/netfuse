@@ -2,27 +2,29 @@ import AppKit
 import Charts
 import SwiftUI
 
-/// Which adapter the details window should scroll to (set by a click in the menu).
+/// What the details window shows: the overview, or one adapter (by BSD name).
 @MainActor @Observable
 final class DetailsFocus {
     static let shared = DetailsFocus()
-    var adapter: String?
+    static let overview = "overview"
+    var selection: String = overview
 }
 
-/// Every connection in detail: traffic over the last ten minutes, addresses, ISP, and the apps
-/// the engine has on it.
+/// The details window: a sidebar of connections, and for the selection its last ten minutes of
+/// traffic, addresses and interface; the overview adds every app's connections across links.
 struct DetailsView: View {
     private static var window: NSWindow?
 
-    /// Opens (or brings forward) the details window, scrolled to `focus`. An AppKit window rather
-    /// than a SwiftUI Window scene, which would open at launch and quit the app when closed.
+    /// Opens (or brings forward) the window on `adapter` (nil: the overview). An AppKit window
+    /// rather than a SwiftUI Window scene, which would open at launch and quit the app when closed.
     static func show(focus adapter: String?) {
-        DetailsFocus.shared.adapter = adapter
+        DetailsFocus.shared.selection = adapter ?? DetailsFocus.overview
         if window == nil {
             let w = NSWindow(contentViewController: NSHostingController(rootView: DetailsView()))
-            w.title = "Nethance Connections"
-            w.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-            w.setContentSize(NSSize(width: 680, height: 860))
+            w.title = "Nethance"
+            w.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
+            w.titlebarAppearsTransparent = true
+            w.setContentSize(NSSize(width: 940, height: 680))
             w.isReleasedWhenClosed = false
             w.center()
             window = w
@@ -32,30 +34,34 @@ struct DetailsView: View {
     }
 
     private var monitor = AdapterMonitor.shared
-    private var focus = DetailsFocus.shared
+    @Bindable private var focus = DetailsFocus.shared
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: Astryx.space(4)) {
-                    summary
-                    if monitor.adapters.isEmpty {
-                        Card {
-                            Text("No connections found").font(Astryx.Font.body).foregroundStyle(Astryx.Color.textSecondary)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(Astryx.space(4))
-                        }
-                    }
+        NavigationSplitView {
+            List(selection: $focus.selection) {
+                Label("Overview", systemImage: "square.grid.2x2").tag(DetailsFocus.overview)
+                Section("Connections") {
                     ForEach(monitor.adapters) { a in
-                        AdapterCard(adapter: a, monitor: monitor).id(a.id)
+                        SidebarRow(adapter: a, online: monitor.isOnline(a)).tag(a.id)
                     }
                 }
-                .padding(Astryx.space(5))
             }
-            .onAppear { scroll(proxy) }
-            .onChange(of: focus.adapter) { scroll(proxy) }
+            .navigationSplitViewColumnWidth(min: 200, ideal: 230)
+        } detail: {
+            ScrollView {
+                Group {
+                    if let a = monitor.adapters.first(where: { $0.id == focus.selection }) {
+                        AdapterPage(adapter: a, monitor: monitor)
+                    } else {
+                        OverviewPage(monitor: monitor)
+                    }
+                }
+                .padding(Astryx.space(6))
+                .frame(maxWidth: 900, alignment: .leading)
+            }
+            .background(Astryx.Color.body)
         }
-        .frame(minWidth: 600, minHeight: 500)
-        .background(Astryx.Color.body)
+        .frame(minWidth: 820, minHeight: 560)
         .task {
             while !Task.isCancelled {
                 monitor.refreshPublicInfo()
@@ -63,82 +69,280 @@ struct DetailsView: View {
             }
         }
     }
+}
 
-    private func scroll(_ proxy: ScrollViewProxy) {
-        guard let id = focus.adapter else { return }
-        withAnimation { proxy.scrollTo(id, anchor: .top) }
-    }
+private struct SidebarRow: View {
+    var adapter: Adapter
+    var online: Bool
 
-    private var summary: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: Astryx.space(1)) {
-                Text("Connections").font(Astryx.Font.h3).foregroundStyle(Astryx.Color.textPrimary)
-                Text("\(monitor.adapters.filter(monitor.isOnline).count) online · last 10 minutes")
-                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+    var body: some View {
+        HStack(spacing: Astryx.space(2)) {
+            Image(systemName: adapter.symbol).frame(width: 18)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(adapter.name).lineLimit(1)
+                Text("↓ \(speedText(adapter.rxBytesPerSec))").font(.caption).monospacedDigit().foregroundStyle(.secondary)
             }
-            Spacer()
-            Rate(symbol: "arrow.down", value: monitor.totalRx, color: Astryx.Color.download, large: true)
-            Rate(symbol: "arrow.up", value: monitor.totalTx, color: Astryx.Color.upload, large: true)
+            Spacer(minLength: 0)
+            Circle().fill(online ? Astryx.Color.success : Astryx.Color.textDisabled).frame(width: 7, height: 7)
         }
     }
 }
 
-private struct AdapterCard: View {
+// MARK: overview
+
+private struct OverviewPage: View {
+    var monitor: AdapterMonitor
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Astryx.space(5)) {
+            PageHeader(symbol: "point.3.connected.trianglepath.dotted", title: "All connections",
+                       subtitle: "\(monitor.adapters.filter(monitor.isOnline).count) online · " + engineState,
+                       rx: monitor.totalRx, tx: monitor.totalTx)
+            TitledCard("Traffic · last 10 minutes") { TrafficChart(samples: combined).padding(Astryx.space(4)) }
+            TitledCard("Connections") {
+                ForEach(Array(monitor.adapters.enumerated()), id: \.element.id) { i, a in
+                    if i > 0 { Divider().overlay(Astryx.Color.border) }
+                    ConnectionRow(adapter: a, monitor: monitor)
+                }
+            }
+            TitledCard("Apps") { AppsTable(monitor: monitor) }
+        }
+    }
+
+    private var engineState: String {
+        monitor.engine != nil ? "Nethance is combining them" : "Nethance is off"
+    }
+
+    /// All adapters' samples added up per second.
+    private var combined: [Sample] {
+        var byTime: [Int: Sample] = [:]
+        for samples in monitor.history.values {
+            for s in samples {
+                let k = Int(s.time.timeIntervalSince1970)
+                var c = byTime[k] ?? Sample(time: Date(timeIntervalSince1970: Double(k)), rx: 0, tx: 0)
+                c.rx += s.rx
+                c.tx += s.tx
+                byTime[k] = c
+            }
+        }
+        return byTime.values.sorted { $0.time < $1.time }
+    }
+}
+
+private struct ConnectionRow: View {
+    var adapter: Adapter
+    var monitor: AdapterMonitor
+
+    var body: some View {
+        let pub = monitor.publicInfo[adapter.id]
+        HStack(spacing: Astryx.space(3)) {
+            Image(systemName: adapter.symbol).font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Astryx.Color.textPrimary)
+                .frame(width: 28, height: 28)
+                .background(Astryx.Color.muted, in: RoundedRectangle(cornerRadius: Astryx.Radius.inner))
+            VStack(alignment: .leading, spacing: 0) {
+                Text(adapter.name).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
+                Text(pub.map { "\($0.isp) · \($0.ip)" } ?? (monitor.isOnline(adapter) ? "Looking up provider…" : "No internet"))
+                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary).lineLimit(1)
+            }
+            Spacer()
+            if let link = monitor.engine?.link(adapter.id) {
+                Text("\(link.active) open").font(Astryx.Font.supporting).monospacedDigit().foregroundStyle(Astryx.Color.textSecondary)
+            }
+            Rate(symbol: "arrow.down", value: adapter.rxBytesPerSec, color: Astryx.Color.download).frame(width: 120, alignment: .trailing)
+            Rate(symbol: "arrow.up", value: adapter.txBytesPerSec, color: Astryx.Color.upload).frame(width: 120, alignment: .trailing)
+        }
+        .padding(.horizontal, Astryx.space(4)).padding(.vertical, Astryx.space(2.5))
+        .contentShape(Rectangle())
+        .onTapGesture { DetailsFocus.shared.selection = adapter.id }
+    }
+}
+
+/// Every app the engine has connections for, with where they are open: one list for all links.
+private struct AppsTable: View {
+    var monitor: AdapterMonitor
+
+    var body: some View {
+        if let engine = monitor.engine {
+            let rows = Dictionary(grouping: engine.apps, by: \.app)
+                .map { (app: $0.key, flows: $0.value.sorted { $0.flows > $1.flows }) }
+                .sorted { total($0.flows) > total($1.flows) }
+            if rows.isEmpty {
+                note("No app has a connection open right now")
+            } else {
+                let icons = runningIcons()
+                ForEach(Array(rows.prefix(20).enumerated()), id: \.element.app) { i, r in
+                    if i > 0 { Divider().overlay(Astryx.Color.border) }
+                    HStack(spacing: Astryx.space(3)) {
+                        Group {
+                            if let icon = icons[r.app] ?? installedIcon(r.app) { Image(nsImage: icon).resizable() }
+                            else { Image(systemName: "terminal").foregroundStyle(Astryx.Color.iconSecondary) }
+                        }
+                        .frame(width: 20, height: 20)
+                        Text(r.app.isEmpty ? "Virtual machines & system" : r.app).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
+                            .help(r.app.isEmpty ? "Traffic no app on this Mac owns: virtual machines and Internet Sharing (the system forwards it), or connections that closed before Nethance looked." : "")
+                        if case let rule = RuleStore.shared.policy(for: r.app), rule != .combine {
+                            Badge(text: rule.text(name), tone: .neutral)
+                        }
+                        Spacer()
+                        Text(r.flows.map { "\(name($0.adapter)) \($0.flows)" }.joined(separator: " · "))
+                            .font(Astryx.Font.supporting).monospacedDigit().foregroundStyle(Astryx.Color.textSecondary)
+                        Text("\(total(r.flows))").font(Astryx.Font.label).monospacedDigit()
+                            .foregroundStyle(Astryx.Color.textPrimary).frame(width: 36, alignment: .trailing)
+                    }
+                    .padding(.horizontal, Astryx.space(4)).padding(.vertical, Astryx.space(2))
+                }
+            }
+        } else {
+            note("Turn Nethance on to see which apps use which connection")
+        }
+    }
+
+    private func total(_ f: [EngineStatus.Flows]) -> Int { f.reduce(0) { $0 + $1.flows } }
+    private func name(_ id: String) -> String { monitor.adapters.first { $0.id == id }?.name ?? id }
+
+    private func note(_ s: String) -> some View {
+        Text(s).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(Astryx.space(4))
+    }
+}
+
+// MARK: one adapter
+
+private struct AdapterPage: View {
     var adapter: Adapter
     var monitor: AdapterMonitor
 
     var body: some View {
         let online = monitor.isOnline(adapter)
         let pub = monitor.publicInfo[adapter.id]
-        Card {
-            VStack(alignment: .leading, spacing: Astryx.space(4)) {
-                HStack(spacing: Astryx.space(3)) {
-                    Image(systemName: adapter.symbol)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(online ? Astryx.Color.textPrimary : Astryx.Color.textDisabled)
-                        .frame(width: 36, height: 36)
-                        .background(Astryx.Color.muted, in: RoundedRectangle(cornerRadius: Astryx.Radius.inner))
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack(spacing: Astryx.space(1.5)) {
-                            Text(adapter.name).font(Astryx.Font.large).foregroundStyle(Astryx.Color.textPrimary)
-                            Text(adapter.id).font(Astryx.Font.code).foregroundStyle(Astryx.Color.textSecondary)
-                        }
-                        Text(pub.map { "\($0.isp) · \($0.place)" } ?? (online ? "Looking up provider…" : "No internet"))
-                            .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary).lineLimit(1)
-                    }
-                    Spacer()
-                    Badge(text: online ? "Online" : "Offline", tone: online ? .success : .neutral)
-                }
-                HStack(spacing: Astryx.space(4)) {
-                    Rate(symbol: "arrow.down", value: adapter.rxBytesPerSec, color: Astryx.Color.download)
-                    Rate(symbol: "arrow.up", value: adapter.txBytesPerSec, color: Astryx.Color.upload)
-                }
-                TrafficChart(samples: monitor.history[adapter.id] ?? [])
-                Grid(alignment: .leading, horizontalSpacing: Astryx.space(4), verticalSpacing: Astryx.space(2)) {
-                    GridRow {
-                        Field("Public IP", pub?.ip)
-                        Field("Local IP", adapter.ipv4)
-                    }
-                    GridRow {
-                        Field("Provider", pub?.isp)
-                        Field("Router", adapter.router ?? monitor.engine?.link(adapter.id).map { _ in "Through the engine" })
-                    }
-                    GridRow {
-                        Field("Location", pub?.place)
-                        Field("MAC address", adapter.mac)
-                    }
-                    GridRow {
-                        Field("Since app start", monitor.totals[adapter.id].map {
-                            "↓ \(bytesText($0.rx))   ↑ \(bytesText($0.tx))"
-                        })
-                        Field("Link speed", adapter.linkSpeed > 0 ? "\(adapter.linkSpeed / 1_000_000) Mbit/s" : nil)
-                    }
-                }
-                AppsOnLink(adapter: adapter.id, engine: monitor.engine)
+        VStack(alignment: .leading, spacing: Astryx.space(5)) {
+            PageHeader(symbol: adapter.symbol, title: adapter.name,
+                       subtitle: pub.map { "\($0.isp) · \($0.place)" } ?? (online ? "Looking up provider…" : "No internet"),
+                       rx: adapter.rxBytesPerSec, tx: adapter.txBytesPerSec, online: online)
+            TitledCard("Traffic · last 10 minutes") {
+                TrafficChart(samples: monitor.history[adapter.id] ?? []).padding(Astryx.space(4))
             }
-            .padding(Astryx.space(4))
+            HStack(alignment: .top, spacing: Astryx.space(4)) {
+                TitledCard("Address") {
+                    KeyValue("Public IP", pub?.ip)
+                    KeyValue("Provider", pub?.isp)
+                    KeyValue("Location", pub?.place)
+                    KeyValue("Local IP", adapter.ipv4)
+                    KeyValue("Router", adapter.router ?? monitor.engine?.link(adapter.id).map { _ in "Through the engine" }, last: true)
+                }
+                TitledCard("Interface") {
+                    KeyValue("Device", adapter.id)
+                    KeyValue("MAC address", adapter.mac)
+                    KeyValue("Link speed", adapter.linkSpeed > 0 ? "\(adapter.linkSpeed / 1_000_000) Mbit/s" : nil)
+                    KeyValue("Open connections", monitor.engine?.link(adapter.id).map { "\($0.active)" })
+                    KeyValue("Since app start", monitor.totals[adapter.id].map { "↓ \(bytesText($0.rx))  ↑ \(bytesText($0.tx))" }, last: true)
+                }
+            }
         }
     }
+}
+
+// MARK: building blocks
+
+private struct PageHeader: View {
+    var symbol: String
+    var title: String
+    var subtitle: String
+    var rx: Double
+    var tx: Double
+    var online: Bool? = nil
+
+    var body: some View {
+        HStack(alignment: .center, spacing: Astryx.space(3)) {
+            Image(systemName: symbol).font(.system(size: 20, weight: .medium)).foregroundStyle(Astryx.Color.textPrimary)
+                .frame(width: 44, height: 44)
+                .background(Astryx.Color.card, in: RoundedRectangle(cornerRadius: Astryx.Radius.element))
+                .overlay(RoundedRectangle(cornerRadius: Astryx.Radius.element).strokeBorder(Astryx.Color.border))
+            VStack(alignment: .leading, spacing: Astryx.space(0.5)) {
+                HStack(spacing: Astryx.space(2)) {
+                    Text(title).font(Astryx.Font.figtree(22, .semibold)).foregroundStyle(Astryx.Color.textPrimary)
+                    if let online { Badge(text: online ? "Online" : "Offline", tone: online ? .success : .neutral) }
+                }
+                Text(subtitle).font(Astryx.Font.body).foregroundStyle(Astryx.Color.textSecondary).lineLimit(1)
+            }
+            Spacer()
+            HStack(spacing: Astryx.space(6)) {
+                Hero(label: "Download", value: rx, color: Astryx.Color.download)
+                Hero(label: "Upload", value: tx, color: Astryx.Color.upload)
+            }
+        }
+    }
+}
+
+private struct Hero: View {
+    var label: String
+    var value: Double
+    var color: SwiftUI.Color
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            Text(speedText(value)).font(Astryx.Font.figtree(20, .semibold)).monospacedDigit().foregroundStyle(Astryx.Color.textPrimary)
+            HStack(spacing: Astryx.space(1)) {
+                Circle().fill(color).frame(width: 8, height: 8)
+                Text(label).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+            }
+        }
+    }
+}
+
+/// A titled card, like the menu's sections.
+private struct TitledCard<Content: View>: View {
+    var title: String
+    @ViewBuilder var content: Content
+    init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Astryx.space(2)) {
+            Text(title.uppercased()).font(Astryx.Font.h6).tracking(0.6).foregroundStyle(Astryx.Color.textSecondary)
+                .padding(.leading, Astryx.space(1))
+            Card { content }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct KeyValue: View {
+    var key: String
+    var value: String?
+    var last = false
+    init(_ key: String, _ value: String?, last: Bool = false) { self.key = key; self.value = value; self.last = last }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(key).font(Astryx.Font.body).foregroundStyle(Astryx.Color.textSecondary)
+                Spacer(minLength: Astryx.space(3))
+                Text(value ?? "—").font(Astryx.Font.label).monospacedDigit().foregroundStyle(Astryx.Color.textPrimary)
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+            }
+            .padding(.horizontal, Astryx.space(4)).padding(.vertical, Astryx.space(2.5))
+            if !last { Divider().overlay(Astryx.Color.border).padding(.leading, Astryx.space(4)) }
+        }
+    }
+}
+
+@MainActor private func runningIcons() -> [String: NSImage] {
+    var out: [String: NSImage] = [:]
+    for app in NSWorkspace.shared.runningApplications {
+        guard let url = app.bundleURL, let icon = app.icon else { continue }
+        out[appName(forPath: url.path)] = out[appName(forPath: url.path)] ?? icon
+    }
+    return out
+}
+
+/// Apps whose network work runs in a helper or daemon are often not "running" as such.
+private func installedIcon(_ name: String) -> NSImage? {
+    guard !name.isEmpty else { return nil }
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    return ["/Applications", "\(home)/Applications", "/System/Applications"].map { "\($0)/\(name).app" }
+        .first(where: FileManager.default.fileExists(atPath:))
+        .map(NSWorkspace.shared.icon(forFile:))
 }
 
 /// Download above the line, upload below it, both in Mbit/s on one scale; hover for values.
@@ -148,6 +352,8 @@ private struct TrafficChart: View {
 
     var body: some View {
         let now = samples.last?.time ?? Date()
+        // One scale for both directions, centred on zero so the halves compare at a glance.
+        let peak = max(samples.map { max(mbit($0.rx), mbit($0.tx)) }.max() ?? 0, 0.1) * 1.1
         Chart {
             ForEach(samples, id: \.time) { s in
                 AreaMark(x: .value("Time", s.time), y: .value("Mbit/s", mbit(s.rx)), series: .value("Direction", "Download"))
@@ -181,8 +387,10 @@ private struct TrafficChart: View {
                 }
             }
         }
+        .chartYScale(domain: -peak...peak)
+        .chartYAxisLabel("Mbit/s", position: .leading)
         .chartXSelection(value: $hover)
-        .frame(height: 150)
+        .frame(height: 200)
         .overlay {
             if samples.count < 2 {
                 Text("Collecting…").font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
@@ -204,77 +412,6 @@ private struct TrafficChart: View {
         .padding(.horizontal, Astryx.space(2)).padding(.vertical, Astryx.space(1))
         .background(Astryx.Color.card, in: RoundedRectangle(cornerRadius: Astryx.Radius.inner))
         .overlay(RoundedRectangle(cornerRadius: Astryx.Radius.inner).strokeBorder(Astryx.Color.border))
-    }
-}
-
-/// The apps the engine has open connections for on this adapter, busiest first.
-private struct AppsOnLink: View {
-    var adapter: String
-    var engine: EngineStatus?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Astryx.space(2)) {
-            Text("APPS ON THIS CONNECTION").font(Astryx.Font.h6).tracking(0.6).foregroundStyle(Astryx.Color.textSecondary)
-            if let engine {
-                let apps = engine.apps.filter { $0.adapter == adapter }.sorted { $0.flows > $1.flows }
-                if apps.isEmpty {
-                    note("None right now")
-                } else {
-                    let icons = runningIcons()
-                    ForEach(apps.prefix(8), id: \.app) { f in
-                        HStack(spacing: Astryx.space(2)) {
-                            Group {
-                                if let icon = icons[f.app] ?? installedIcon(f.app) { Image(nsImage: icon).resizable() }
-                                else { Image(systemName: "terminal").foregroundStyle(Astryx.Color.iconSecondary) }
-                            }
-                            .frame(width: 18, height: 18)
-                            Text(f.app.isEmpty ? "Unknown app" : f.app).font(Astryx.Font.body).foregroundStyle(Astryx.Color.textPrimary)
-                            Spacer()
-                            Text("\(f.flows) open").font(Astryx.Font.supporting).monospacedDigit().foregroundStyle(Astryx.Color.textSecondary)
-                        }
-                    }
-                }
-            } else {
-                note("Turn Nethance on to see which apps use this connection")
-            }
-        }
-    }
-
-    private func note(_ s: String) -> some View {
-        Text(s).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
-    }
-
-    /// Apps whose network work runs in a helper or daemon are often not "running" as such.
-    private func installedIcon(_ name: String) -> NSImage? {
-        guard !name.isEmpty else { return nil }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return ["/Applications", "\(home)/Applications"].map { "\($0)/\(name).app" }
-            .first(where: FileManager.default.fileExists(atPath:))
-            .map(NSWorkspace.shared.icon(forFile:))
-    }
-
-    private func runningIcons() -> [String: NSImage] {
-        var out: [String: NSImage] = [:]
-        for app in NSWorkspace.shared.runningApplications {
-            guard let url = app.bundleURL, let icon = app.icon else { continue }
-            out[appName(forPath: url.path)] = out[appName(forPath: url.path)] ?? icon
-        }
-        return out
-    }
-}
-
-private struct Field: View {
-    var label: String
-    var value: String?
-    init(_ label: String, _ value: String?) { self.label = label; self.value = value }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(label).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
-            Text(value ?? "—").font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
-                .textSelection(.enabled).lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

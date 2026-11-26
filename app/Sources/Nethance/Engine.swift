@@ -6,6 +6,7 @@ struct EngineStatus: Decodable, Sendable {
         var name: String      // BSD name, "en0"
         var active: Int       // open connections
         var coolingDown: Bool // its link just failed; new connections avoid it for a while
+        var label: String?    // a name macOS has none for: the Android phone's model
     }
     struct Flows: Decodable, Sendable {
         var app: String       // "" when the engine could not tell which app it was

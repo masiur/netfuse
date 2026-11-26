@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 struct MenuView: View {
     private var monitor = AdapterMonitor.shared
-    @State private var rules = RuleStore()
+    private var rules = RuleStore.shared
     @State private var extraApps: [URL] = []
     @State private var apps: [AppEntry] = []
     @State private var isOn = EngineSwitch.isOn
@@ -41,13 +41,16 @@ struct MenuView: View {
 
     /// Opens the details window, scrolled to one adapter's card (nil: the top).
     private func showDetails(_ adapter: String?) {
+        let menu = NSApp.windows.first { $0.isVisible && String(describing: type(of: $0)).contains("MenuBarExtra") }
         DetailsView.show(focus: adapter)
+        menu?.close() // the menu would otherwise stay open over the window
     }
 
     // MARK: sections
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
+        // Top-aligned: a switch has no text baseline, and baseline alignment pushed it down.
+        HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: Astryx.space(0.5)) {
                 Text("Nethance").font(Astryx.Font.h3).foregroundStyle(Astryx.Color.textPrimary)
                 Text("↓ \(speedText(monitor.totalRx))   ↑ \(speedText(monitor.totalTx))")
@@ -55,7 +58,7 @@ struct MenuView: View {
                     .foregroundStyle(Astryx.Color.textSecondary)
             }
             Spacer()
-            HStack(spacing: Astryx.space(2)) {
+            HStack(alignment: .center, spacing: Astryx.space(2)) {
                 state
                 Toggle("Nethance on", isOn: Binding(get: { isOn }, set: flip))
                     .toggleStyle(.switch).labelsHidden().controlSize(.small)
@@ -267,12 +270,5 @@ struct AppRow: View {
 
     private func name(_ id: String) -> String { adapters.first { $0.id == id }?.name ?? id }
 
-    private var label: String {
-        switch policy {
-        case .combine: "All connections"
-        case .only(let a): "Only \(name(a))"
-        case .prefer(let a): "\(name(a)) first"
-        case .custom(let r): r
-        }
-    }
+    private var label: String { policy.text(name) }
 }

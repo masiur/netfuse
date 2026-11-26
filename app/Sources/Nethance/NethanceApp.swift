@@ -42,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        let root = details ? AnyView(DetailsView().frame(width: 680, height: 1300)) : AnyView(MenuView())
+        let root = details ? AnyView(DetailsView().frame(width: 940, height: 1100)) : AnyView(MenuView())
         let w = NSWindow(contentViewController: NSHostingController(rootView: root))
         w.title = "Nethance"
         w.styleMask = [.titled, .closable]
