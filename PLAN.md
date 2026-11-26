@@ -1,4 +1,4 @@
-# Nethance: plan
+# Netfuse: plan
 
 Goal: a macOS menu-bar app that uses Wi-Fi, Ethernet, the phone hotspot (USB / Bluetooth) and
 USB adapters **at the same time**, and lets you choose per app: *this adapter*, *combine all*, or
@@ -64,16 +64,16 @@ proves unreliable or you want to distribute it widely.
 - **Swift app + Rust engine, no Go.** `app/`: SwiftUI menu-bar app. `engine/`: Rust root daemon (TUN,
   userland TCP/IP stack, per-app routing). The Go net-merge fork was only a prototype that proved the rule
   model and app lookup; it is not part of this repo.
-- **Design:** Astryx (astryx.atmeta.com) tokens, translated by hand in `app/Sources/Nethance/Theme.swift`.
+- **Design:** Astryx (astryx.atmeta.com) tokens, translated by hand in `app/Sources/Netfuse/Theme.swift`.
 - **Android USB:** the test phone only offers RNDIS, which macOS cannot use without TetherKit.
 
 ## Contract between app and engine
-- Rules: `~/Library/Application Support/Nethance/rules.json`, `{"version":1,"rules":{"<app>":"<route>"}}`.
+- Rules: `~/Library/Application Support/Netfuse/rules.json`, `{"version":1,"rules":{"<app>":"<route>"}}`.
   `<app>` is the outermost `.app` bundle's name (or the executable's name for CLI tools).
   `<route>` lists adapter tiers separated by `>` and tried in order; adapters joined by `+` are combined.
   An adapter is a BSD name (`en4`) or a service name (`Wi-Fi`); `*` means every adapter and `auto` means
   no rule. Example: `en4 > *`.
-- Status: `/var/run/nethance/status.json`, rewritten every second while the engine runs.
+- Status: `/var/run/netfuse/status.json`, rewritten every second while the engine runs.
 
 ## Phases
 0. **Validate hardware.** Bring up each link (Wi-Fi, Ethernet, iPhone USB, Bluetooth PAN, Android via

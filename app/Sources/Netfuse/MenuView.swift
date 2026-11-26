@@ -59,7 +59,7 @@ struct MenuView: View {
         // Top-aligned: a switch has no text baseline, and baseline alignment pushed it down.
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: Astryx.space(0.5)) {
-                Text("Nethance").font(Astryx.Font.h3).foregroundStyle(Astryx.Color.textPrimary)
+                Text("Netfuse").font(Astryx.Font.h3).foregroundStyle(Astryx.Color.textPrimary)
                 Text("↓ \(speedText(monitor.totalRx))   ↑ \(speedText(monitor.totalTx))")
                     .font(Astryx.Font.supporting).monospacedDigit()
                     .foregroundStyle(Astryx.Color.textSecondary)
@@ -67,7 +67,7 @@ struct MenuView: View {
             Spacer()
             HStack(alignment: .center, spacing: Astryx.space(2)) {
                 state
-                Toggle("Nethance on", isOn: Binding(get: { isOn }, set: flip))
+                Toggle("Netfuse on", isOn: Binding(get: { isOn }, set: flip))
                     .toggleStyle(.switch).labelsHidden().controlSize(.small)
             }
         }
@@ -77,7 +77,7 @@ struct MenuView: View {
         if engine != nil {
             Badge(text: "Combining", tone: .success)
         } else if !isOn {
-            Badge(text: "Off", tone: .neutral).help("Rules are saved and apply when Nethance is on.")
+            Badge(text: "Off", tone: .neutral).help("Rules are saved and apply when Netfuse is on.")
         } else if let since = EngineSwitch.onSince, Date().timeIntervalSince(since) > 15 {
             Badge(text: "Not running", tone: .error).help("The engine did not start. Its log: \(EngineSwitch.log)")
         } else {
@@ -137,7 +137,7 @@ struct MenuView: View {
         if let phone = monitor.usbPhone {
             if !monitor.adapters.isEmpty { Divider().overlay(Astryx.Color.border) }
             AdapterRow(adapter: Adapter(id: "USB", name: phone, kind: .android),
-                       note: isOn ? "Connecting… (is USB tethering on?)" : "Turn Nethance on to use it")
+                       note: isOn ? "Connecting… (is USB tethering on?)" : "Turn Netfuse on to use it")
         }
         if let iPhone = monitor.idleIPhone {
             Divider().overlay(Astryx.Color.border)

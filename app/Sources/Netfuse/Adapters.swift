@@ -55,7 +55,7 @@ final class AdapterMonitor {
     /// An iPhone plugged in over USB that gives no internet (Personal Hotspot off, or macOS keeping
     /// it down "unless needed"): its display name, for the menu's hint.
     private(set) var idleIPhone: String?
-    /// An Android phone with USB tethering on that is not an adapter yet (Nethance is off, or the
+    /// An Android phone with USB tethering on that is not an adapter yet (Netfuse is off, or the
     /// engine is still connecting): its name. Listing it keeps the menu from jumping on/off.
     private(set) var usbPhone: String?
     private var usbPhones: [String] = []
@@ -209,7 +209,7 @@ final class AdapterMonitor {
 
     /// Interface -> IPv4 router of its network service (macOS keeps one per service).
     private static func routers() -> [String: String] {
-        guard let store = SCDynamicStoreCreate(nil, "Nethance" as CFString, nil, nil),
+        guard let store = SCDynamicStoreCreate(nil, "Netfuse" as CFString, nil, nil),
               let keys = SCDynamicStoreCopyKeyList(store, "State:/Network/Service/.*/IPv4" as CFString) as? [String]
         else { return [:] }
         var out: [String: String] = [:]

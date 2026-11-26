@@ -17,7 +17,7 @@ struct EngineStatus: Decodable, Sendable {
     var adapters: [Link]
     var apps: [Flows]
 
-    static let path = "/var/run/nethance/status.json"
+    static let path = "/var/run/netfuse/status.json"
 
     /// nil when the engine is not running: no file, or one it stopped rewriting.
     static func read(now: Date = Date()) -> EngineStatus? {
@@ -47,9 +47,9 @@ struct EngineStatus: Decodable, Sendable {
 @MainActor
 enum EngineSwitch {
     static let flag = RuleStore.defaultURL.deletingLastPathComponent().appending(path: "enabled")
-    static let installedBinary = "/Library/PrivilegedHelperTools/app.nethance.engine"
-    static let plist = "/Library/LaunchDaemons/app.nethance.engine.plist"
-    static let log = "/var/log/nethance-engine.log"
+    static let installedBinary = "/Library/PrivilegedHelperTools/app.netfuse.engine"
+    static let plist = "/Library/LaunchDaemons/app.netfuse.engine.plist"
+    static let log = "/var/log/netfuse-engine.log"
 
     static var isOn: Bool { FileManager.default.fileExists(atPath: flag.path) }
 
@@ -60,7 +60,7 @@ enum EngineSwitch {
     }
 
     private static var bundledEngine: URL? {
-        Bundle.main.resourceURL.map { $0.appending(path: "nethance-engine") }.flatMap {
+        Bundle.main.resourceURL.map { $0.appending(path: "netfuse-engine") }.flatMap {
             FileManager.default.fileExists(atPath: $0.path) ? $0 : nil
         }
     }
@@ -85,9 +85,9 @@ enum EngineSwitch {
     /// (it is installed but not running, e.g. launchd did not load it).
     static func installIfNeeded(force: Bool = false) throws {
         guard let res = Bundle.main.resourceURL,
-              case let engine = res.appending(path: "nethance-engine"), case let script = res.appending(path: "install-engine.sh"),
+              case let engine = res.appending(path: "netfuse-engine"), case let script = res.appending(path: "install-engine.sh"),
               FileManager.default.fileExists(atPath: engine.path)
-        else { throw Failure("The engine is not inside this copy of Nethance. Build it with scripts/bundle.sh.") }
+        else { throw Failure("The engine is not inside this copy of Netfuse. Build it with scripts/bundle.sh.") }
         let fm = FileManager.default
         if !force, fm.fileExists(atPath: plist), fm.contentsEqual(atPath: engine.path, andPath: installedBinary) { return }
         // AppleScript's own quoting, so paths with spaces or quotes stay one argument.
@@ -98,7 +98,7 @@ enum EngineSwitch {
             .joined(separator: " & \" \" & ")
         var err: NSDictionary?
         NSAppleScript(source: "do shell script \(cmd) with administrator privileges "
-                      + "with prompt \"Nethance needs to install its routing engine.\"")?.executeAndReturnError(&err)
+                      + "with prompt \"Netfuse needs to install its routing engine.\"")?.executeAndReturnError(&err)
         if let err {
             if err[NSAppleScript.errorNumber] as? Int == -128 { throw Failure(nil) } // password prompt cancelled
             throw Failure("Could not install the engine: \(err[NSAppleScript.errorMessage] ?? "unknown error")")

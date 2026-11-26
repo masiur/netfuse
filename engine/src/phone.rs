@@ -121,7 +121,7 @@ fn xid() -> u32 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.subsec_nanos())
 }
 
-/// `nethance-engine phone`: talks to the phone and asks it for an address, without creating an
+/// `netfuse-engine phone`: talks to the phone and asks it for an address, without creating an
 /// adapter (works without root). Shows whether the USB side works.
 pub async fn probe() -> io::Result<()> {
     let Some(mut link) = connect().await? else {

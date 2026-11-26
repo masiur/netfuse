@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "Nethance",
+    name: "Netfuse",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Nethance", path: "Sources/Nethance"),
-        .testTarget(name: "NethanceTests", dependencies: ["Nethance"], path: "Tests/NethanceTests"),
+        .executableTarget(name: "Netfuse", path: "Sources/Netfuse"),
+        .testTarget(name: "NetfuseTests", dependencies: ["Netfuse"], path: "Tests/NetfuseTests"),
     ]
 )

@@ -1,13 +1,13 @@
 #!/bin/sh
-# Installs the Nethance engine as a root LaunchDaemon. The app runs this with administrator rights
+# Installs the Netfuse engine as a root LaunchDaemon. The app runs this with administrator rights
 # the first time it is switched on (and after an update changes the engine); by hand:
 #   sudo install-engine.sh ENGINE_BINARY USER_HOME
 #   sudo install-engine.sh --uninstall
 #
-# launchd starts the engine whenever USER_HOME/Library/Application Support/Nethance/enabled exists
+# launchd starts the engine whenever USER_HOME/Library/Application Support/Netfuse/enabled exists
 # (the app's on switch) and the engine stops itself once that file is gone.
 set -eu
-LABEL=app.nethance.engine
+LABEL=app.netfuse.engine
 BIN=/Library/PrivilegedHelperTools/$LABEL
 PLIST=/Library/LaunchDaemons/$LABEL.plist
 
@@ -21,7 +21,7 @@ if [ "${1:-}" = --uninstall ]; then
     exit 0
 fi
 [ $# -eq 2 ] || { echo "usage: $0 ENGINE_BINARY USER_HOME | --uninstall" >&2; exit 2; }
-DIR="$2/Library/Application Support/Nethance"
+DIR="$2/Library/Application Support/Netfuse"
 
 # A root-owned copy, so no user process can swap the program that runs as root.
 install -d -o root -g wheel -m 755 /Library/PrivilegedHelperTools
@@ -45,8 +45,8 @@ cat > "$PLIST" <<EOF
 		<key>PathState</key>
 		<dict><key>$DIR/enabled</key><true/></dict>
 	</dict>
-	<key>StandardOutPath</key><string>/var/log/nethance-engine.log</string>
-	<key>StandardErrorPath</key><string>/var/log/nethance-engine.log</string>
+	<key>StandardOutPath</key><string>/var/log/netfuse-engine.log</string>
+	<key>StandardErrorPath</key><string>/var/log/netfuse-engine.log</string>
 </dict>
 </plist>
 EOF

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Nethance
+@testable import Netfuse
 
 @Test func policyRoundTripsThroughRouteText() {
     let cases: [(String, Policy, String)] = [
@@ -28,7 +28,7 @@ import Testing
 }
 
 @Test @MainActor func rulesSaveInTheEngineFormat() throws {
-    let url = FileManager.default.temporaryDirectory.appending(path: "nethance-\(UUID())/rules.json")
+    let url = FileManager.default.temporaryDirectory.appending(path: "netfuse-\(UUID())/rules.json")
     let store = RuleStore(url: url)
     store.set(.prefer("en4"), for: "Google Chrome")
     store.set(.only("en0"), for: "Zoom")

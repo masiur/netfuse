@@ -663,7 +663,7 @@ async fn tcp_main_logic_loop(
 
         if flags & RST == RST {
             tcb.change_state(TcpState::Closed);
-            // nethance patch: wake the stream so a pending read/write sees Closed now, not at the
+            // netfuse patch: wake the stream so a pending read/write sees Closed now, not at the
             // 60 s idle timeout.
             write_notify.lock().unwrap().take().map(|w| w.wake_by_ref()).unwrap_or(());
             read_notify.lock().unwrap().take().map(|w| w.wake_by_ref()).unwrap_or(());

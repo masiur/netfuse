@@ -1,4 +1,4 @@
-# Nethance
+# Netfuse
 
 Use Wi-Fi, Ethernet, phone tethers and USB adapters at the same time on macOS, and choose which app
 uses which connection.

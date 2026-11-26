@@ -71,7 +71,7 @@ fn ipv4_addresses() -> Vec<(String, u32, Ipv4Addr)> {
 /// each, so a socket bound to the interface (IP_BOUND_IF) reaches the internet through it.
 fn interfaces_with_router() -> HashSet<String> {
     let mut out = HashSet::new();
-    let Some(store) = SCDynamicStoreBuilder::new("nethance-engine").build() else { return out };
+    let Some(store) = SCDynamicStoreBuilder::new("netfuse-engine").build() else { return out };
     let Some(keys) = store.get_keys("State:/Network/Service/.*/IPv4") else { return out };
     for key in keys.iter() {
         let Some(dict) = store.get(key.clone()).and_then(|p| p.downcast_into::<CFDictionary>()) else { continue };

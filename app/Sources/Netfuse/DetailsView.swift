@@ -21,7 +21,7 @@ struct DetailsView: View {
         DetailsFocus.shared.selection = adapter ?? DetailsFocus.overview
         if window == nil {
             let w = NSWindow(contentViewController: NSHostingController(rootView: DetailsView()))
-            w.title = "Nethance"
+            w.title = "Netfuse"
             w.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
             w.titlebarAppearsTransparent = true
             w.setContentSize(NSSize(width: 940, height: 680))
@@ -110,7 +110,7 @@ private struct OverviewPage: View {
     }
 
     private var engineState: String {
-        monitor.engine != nil ? "Nethance is combining them" : "Nethance is off"
+        monitor.engine != nil ? "Netfuse is combining them" : "Netfuse is off"
     }
 
     /// All adapters' samples added up per second.
@@ -180,7 +180,7 @@ private struct AppsTable: View {
                         }
                         .frame(width: 20, height: 20)
                         Text(r.app.isEmpty ? "Virtual machines & system" : r.app).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
-                            .help(r.app.isEmpty ? "Traffic no app on this Mac owns: virtual machines and Internet Sharing (the system forwards it), or connections that closed before Nethance looked." : "")
+                            .help(r.app.isEmpty ? "Traffic no app on this Mac owns: virtual machines and Internet Sharing (the system forwards it), or connections that closed before Netfuse looked." : "")
                         if case let rule = RuleStore.shared.policy(for: r.app), rule != .combine {
                             Badge(text: rule.text(name), tone: .neutral)
                         }
@@ -194,7 +194,7 @@ private struct AppsTable: View {
                 }
             }
         } else {
-            note("Turn Nethance on to see which apps use which connection")
+            note("Turn Netfuse on to see which apps use which connection")
         }
     }
 

@@ -6,9 +6,9 @@ use std::os::raw::{c_char, c_int};
 use std::sync::{LazyLock, Mutex};
 
 unsafe extern "C" {
-    fn nethance_has_port(pid: c_int, tcp: c_int, lport: c_int) -> c_int;
-    fn nethance_find_pid(tcp: c_int, lport: c_int, this: c_int) -> c_int;
-    fn nethance_pid_path(pid: c_int, buf: *mut c_char, size: c_int) -> c_int;
+    fn netfuse_has_port(pid: c_int, tcp: c_int, lport: c_int) -> c_int;
+    fn netfuse_find_pid(tcp: c_int, lport: c_int, this: c_int) -> c_int;
+    fn netfuse_pid_path(pid: c_int, buf: *mut c_char, size: c_int) -> c_int;
 }
 
 const RECENT_MAX: usize = 16;
@@ -30,10 +30,10 @@ pub fn app_for_port(tcp: bool, port: u16) -> Option<String> {
     let t = tcp as c_int;
     let me = std::process::id() as c_int;
     let mut c = CACHE.lock().unwrap();
-    let hit = c.recent.iter().position(|&p| unsafe { nethance_has_port(p, t, port as c_int) } != 0);
+    let hit = c.recent.iter().position(|&p| unsafe { netfuse_has_port(p, t, port as c_int) } != 0);
     let pid = match hit {
         Some(i) => c.recent.remove(i),
-        None => match unsafe { nethance_find_pid(t, port as c_int, me) } {
+        None => match unsafe { netfuse_find_pid(t, port as c_int, me) } {
             0 => return None,
             p => p,
         },
@@ -44,7 +44,7 @@ pub fn app_for_port(tcp: bool, port: u16) -> Option<String> {
         return Some(n.clone());
     }
     let mut buf = vec![0 as c_char; PATH_MAX];
-    if unsafe { nethance_pid_path(pid, buf.as_mut_ptr(), PATH_MAX as c_int) } <= 0 {
+    if unsafe { netfuse_pid_path(pid, buf.as_mut_ptr(), PATH_MAX as c_int) } <= 0 {
         return None;
     }
     let path = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned();

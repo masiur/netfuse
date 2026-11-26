@@ -2,11 +2,11 @@ import AppKit
 import SwiftUI
 
 @main
-struct NethanceApp: App {
+struct NetfuseApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
 
     var body: some Scene {
-        MenuBarExtra("Nethance", systemImage: "point.3.connected.trianglepath.dotted") {
+        MenuBarExtra("Netfuse", systemImage: "point.3.connected.trianglepath.dotted") {
             MenuView()
         }
         .menuBarExtraStyle(.window)
@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let root = details ? AnyView(DetailsView().frame(width: 940, height: 1100)) : AnyView(MenuView())
         let w = NSWindow(contentViewController: NSHostingController(rootView: root))
-        w.title = "Nethance"
+        w.title = "Netfuse"
         w.styleMask = [.titled, .closable]
         w.center()
         w.makeKeyAndOrderFront(nil)

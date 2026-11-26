@@ -7,7 +7,7 @@
 #include <stdlib.h>
 
 // has_port reports whether pid holds a TCP (tcp != 0) or UDP socket on local port lport.
-int nethance_has_port(int pid, int tcp, int lport) {
+int netfuse_has_port(int pid, int tcp, int lport) {
 	int n = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
 	if (n <= 0) return 0;
 	n += 32 * sizeof(struct proc_fdinfo); // room for fds opened in between
@@ -35,7 +35,7 @@ int nethance_has_port(int pid, int tcp, int lport) {
 }
 
 // find_pid scans every process except self and returns the one holding the port, or 0.
-int nethance_find_pid(int tcp, int lport, int self) {
+int netfuse_find_pid(int tcp, int lport, int self) {
 	int n = proc_listallpids(NULL, 0);
 	if (n <= 0) return 0;
 	n += 64;
@@ -44,10 +44,10 @@ int nethance_find_pid(int tcp, int lport, int self) {
 	n = proc_listallpids(pids, n * sizeof(int));
 	int found = 0;
 	for (int i = 0; i < n && !found; i++) {
-		if (pids[i] > 0 && pids[i] != self && nethance_has_port(pids[i], tcp, lport)) found = pids[i];
+		if (pids[i] > 0 && pids[i] != self && netfuse_has_port(pids[i], tcp, lport)) found = pids[i];
 	}
 	free(pids);
 	return found;
 }
 
-int nethance_pid_path(int pid, char *buf, int size) { return proc_pidpath(pid, buf, size); }
+int netfuse_pid_path(int pid, char *buf, int size) { return proc_pidpath(pid, buf, size); }

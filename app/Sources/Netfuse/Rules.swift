@@ -37,7 +37,7 @@ enum Policy: Hashable, Sendable {
 }
 
 /// The app's rules, saved where the engine reads them:
-/// ~/Library/Application Support/Nethance/rules.json, {"version":1,"rules":{"Google Chrome":"en4 > *"}}.
+/// ~/Library/Application Support/Netfuse/rules.json, {"version":1,"rules":{"Google Chrome":"en4 > *"}}.
 /// Keys are app names as the engine sees them: the outermost .app bundle's name.
 @MainActor @Observable
 final class RuleStore {
@@ -54,7 +54,7 @@ final class RuleStore {
 
     static var defaultURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "Nethance/rules.json")
+            .appending(path: "Netfuse/rules.json")
     }
 
     func policy(for app: String) -> Policy { rules[app] ?? .combine }
@@ -115,7 +115,7 @@ func listApps(rules: [String: Policy], extra: [URL]) -> [AppEntry] {
     for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
         guard let url = app.bundleURL else { continue }
         let name = appName(forPath: url.path)
-        if name == "Nethance" { continue }
+        if name == "Netfuse" { continue }
         seen[name] = AppEntry(name: name, icon: app.icon)
     }
     for url in extra {

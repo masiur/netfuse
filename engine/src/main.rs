@@ -1,4 +1,4 @@
-//! Nethance engine: sends every new connection out of one of the Mac's internet adapters, picked
+//! Netfuse engine: sends every new connection out of one of the Mac's internet adapters, picked
 //! per app from the menu-bar app's rules.json.
 
 mod adapters;
@@ -23,14 +23,14 @@ use serde::{Deserialize, Serialize};
 use sched::{Route, Scheduler, parse_route, route_text};
 
 const USAGE: &str = "usage:
-  sudo nethance-engine run [--rules FILE] [--status FILE] [--for SECONDS] [--while FILE]
+  sudo netfuse-engine run [--rules FILE] [--status FILE] [--for SECONDS] [--while FILE]
                                      capture and route traffic until Ctrl+C, the time is up,
                                      or FILE (the app's on switch) is gone
-  nethance-engine list                                       show the adapters it would use
-  nethance-engine phone                                      check an Android phone's USB tethering
-  nethance-engine rules [--rules FILE]                       show the rules it would apply";
+  netfuse-engine list                                       show the adapters it would use
+  netfuse-engine phone                                      check an Android phone's USB tethering
+  netfuse-engine rules [--rules FILE]                       show the rules it would apply";
 
-const STATUS_PATH: &str = "/var/run/nethance/status.json";
+const STATUS_PATH: &str = "/var/run/netfuse/status.json";
 
 pub struct State {
     pub sched: Arc<Scheduler>,
@@ -85,7 +85,7 @@ fn default_rules_path() -> PathBuf {
         Ok(user) if !user.is_empty() => PathBuf::from("/Users").join(user),
         _ => PathBuf::from(std::env::var("HOME").unwrap_or_default()),
     };
-    home.join("Library/Application Support/Nethance/rules.json")
+    home.join("Library/Application Support/Netfuse/rules.json")
 }
 
 #[derive(Serialize)]
@@ -168,7 +168,7 @@ async fn main() {
 
 async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>, on_flag: Option<PathBuf>) -> std::io::Result<()> {
     if unsafe { libc::geteuid() } != 0 {
-        return Err(std::io::Error::other("needs root: sudo nethance-engine run"));
+        return Err(std::io::Error::other("needs root: sudo netfuse-engine run"));
     }
     let st = Arc::new(State { sched: Arc::new(Scheduler::default()), rules: RwLock::new(load_rules(&rules_path)) });
     let found = adapters::discover();
@@ -196,7 +196,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
         }
     };
     let name = tun.name.clone();
-    println!("Nethance is ON through {name}. Ctrl+C to stop.");
+    println!("Netfuse is ON through {name}. Ctrl+C to stop.");
 
     if let Some(dir) = status_path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -265,7 +265,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
     phone::stop();
     scoped::restore();
     let _ = std::fs::remove_file(&status_path);
-    println!("Nethance is OFF.");
+    println!("Netfuse is OFF.");
     std::process::exit(0); // don't wait for open flows: their routes are gone
 }
 
