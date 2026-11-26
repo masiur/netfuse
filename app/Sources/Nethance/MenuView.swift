@@ -8,13 +8,15 @@ struct MenuView: View {
     @State private var extraApps: [URL] = []
     @State private var apps: [AppEntry] = []
     @State private var engine = EngineStatus.read()
+    @State private var isOn = EngineSwitch.isOn
+    @State private var switchError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Astryx.space(4)) {
             header
             section("Connections") { connections }
             section("Apps") { appList }
-            if let err = rules.lastError {
+            if let err = switchError ?? rules.lastError {
                 Text(err).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
             }
             footer
@@ -32,6 +34,7 @@ struct MenuView: View {
         .task {
             while !Task.isCancelled {
                 engine = EngineStatus.read() // rewritten by the engine every second
+                isOn = EngineSwitch.isOn
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -48,13 +51,36 @@ struct MenuView: View {
                     .foregroundStyle(Astryx.Color.textSecondary)
             }
             Spacer()
-            if engine != nil {
-                Badge(text: "Combining", tone: .success)
-            } else {
-                Badge(text: "Engine off", tone: .warning)
-                    .help("The Nethance engine is not running yet. Rules are saved and apply when it starts.")
+            HStack(spacing: Astryx.space(2)) {
+                state
+                Toggle("Nethance on", isOn: Binding(get: { isOn }, set: flip))
+                    .toggleStyle(.switch).labelsHidden().controlSize(.small)
             }
         }
+    }
+
+    @ViewBuilder private var state: some View {
+        if engine != nil {
+            Badge(text: "Combining", tone: .success)
+        } else if !isOn {
+            Badge(text: "Off", tone: .neutral).help("Rules are saved and apply when Nethance is on.")
+        } else if let since = EngineSwitch.onSince, Date().timeIntervalSince(since) > 15 {
+            Badge(text: "Not running", tone: .error).help("The engine did not start. Its log: \(EngineSwitch.log)")
+        } else {
+            Badge(text: "Starting", tone: .neutral)
+        }
+    }
+
+    private func flip(_ on: Bool) {
+        do {
+            try EngineSwitch.set(on)
+            switchError = nil
+        } catch let e as EngineSwitch.Failure {
+            switchError = e.message
+        } catch {
+            switchError = error.localizedDescription
+        }
+        isOn = EngineSwitch.isOn
     }
 
     @ViewBuilder private var connections: some View {

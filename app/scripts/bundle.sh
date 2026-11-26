@@ -27,6 +27,9 @@ EOF
 # Figtree (Astryx's typeface) is used when its .ttf files sit in Resources/Fonts; otherwise the
 # system font stands in.
 if [ -d Resources/Fonts ]; then cp -R Resources/Fonts "$app/Contents/Resources/"; fi
+# The engine and its installer ride along; the app installs them as a LaunchDaemon when switched on.
+(cd ../engine && cargo build --release)
+cp ../engine/target/release/nethance-engine scripts/install-engine.sh "$app/Contents/Resources/"
 codesign --force --sign - "$app"
 echo "built $app"
 if [ "${1:-}" = "--open" ]; then open "$app"; fi
