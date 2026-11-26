@@ -38,3 +38,16 @@ import Testing
     #expect(json?["rules"] as? [String: String] == ["Google Chrome": "en4 > *"])
     #expect(RuleStore(url: url).policy(for: "Google Chrome") == .prefer("en4"))
 }
+
+@Test func readsTheEngineStatus() throws {
+    let json = Data("""
+    {"pid": 1, "updated": 1000, "tunnel": "utun9",
+     "adapters": [{"name": "en0", "ip": "10.0.0.2", "active": 3, "total": 9, "failed": 1, "cooling_down": true}],
+     "apps": [{"app": "curl", "adapter": "en0", "flows": 1}, {"app": "curl", "adapter": "en10", "flows": 4}]}
+    """.utf8)
+    let s = try #require(EngineStatus.decode(json, now: Date(timeIntervalSince1970: 1002)))
+    #expect(s.link("en0")?.active == 3)
+    #expect(s.link("en0")?.coolingDown == true)
+    #expect(s.flows(for: "curl").map(\.adapter) == ["en10", "en0"])
+    #expect(EngineStatus.decode(json, now: Date(timeIntervalSince1970: 1010)) == nil) // stale: engine stopped
+}

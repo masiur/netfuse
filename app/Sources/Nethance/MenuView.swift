@@ -7,7 +7,7 @@ struct MenuView: View {
     @State private var rules = RuleStore()
     @State private var extraApps: [URL] = []
     @State private var apps: [AppEntry] = []
-    @State private var engineRunning = Engine.isRunning()
+    @State private var engine = EngineStatus.read()
 
     var body: some View {
         VStack(alignment: .leading, spacing: Astryx.space(4)) {
@@ -26,8 +26,13 @@ struct MenuView: View {
         .task {
             while !Task.isCancelled {
                 apps = listApps(rules: rules.rules, extra: extraApps)
-                engineRunning = Engine.isRunning()
                 try? await Task.sleep(for: .seconds(3))
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                engine = EngineStatus.read() // rewritten by the engine every second
+                try? await Task.sleep(for: .seconds(1))
             }
         }
     }
@@ -43,7 +48,7 @@ struct MenuView: View {
                     .foregroundStyle(Astryx.Color.textSecondary)
             }
             Spacer()
-            if engineRunning {
+            if engine != nil {
                 Badge(text: "Combining", tone: .success)
             } else {
                 Badge(text: "Engine off", tone: .warning)
@@ -58,7 +63,7 @@ struct MenuView: View {
         }
         ForEach(Array(monitor.adapters.enumerated()), id: \.element.id) { i, a in
             if i > 0 { Divider().overlay(Astryx.Color.border) }
-            AdapterRow(adapter: a)
+            AdapterRow(adapter: a, link: engine?.link(a.id))
         }
         let online = monitor.adapters.filter(\.hasRouter).count
         if online == 1 {
@@ -78,7 +83,8 @@ struct MenuView: View {
             let rows = VStack(spacing: 0) {
                 ForEach(Array(apps.enumerated()), id: \.element.id) { i, app in
                     if i > 0 { Divider().overlay(Astryx.Color.border) }
-                    AppRow(app: app, policy: rules.policy(for: app.name), adapters: monitor.adapters) {
+                    AppRow(app: app, policy: rules.policy(for: app.name), adapters: monitor.adapters,
+                           live: engine?.flows(for: app.name) ?? []) {
                         rules.set($0, for: app.name)
                         apps = listApps(rules: rules.rules, extra: extraApps)
                     }
@@ -127,6 +133,7 @@ struct MenuView: View {
 
 struct AdapterRow: View {
     var adapter: Adapter
+    var link: EngineStatus.Link? // nil while the engine is off or not using this adapter
 
     var body: some View {
         HStack(spacing: Astryx.space(3)) {
@@ -140,8 +147,9 @@ struct AdapterRow: View {
                     Text(adapter.name).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
                     Text(adapter.id).font(Astryx.Font.code).foregroundStyle(Astryx.Color.textSecondary)
                 }
-                Text(adapter.hasRouter ? (adapter.ipv4 ?? "IPv6 only") : "No internet")
-                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                Text(detail)
+                    .font(Astryx.Font.supporting)
+                    .foregroundStyle(link?.coolingDown == true ? Astryx.Color.textWarning : Astryx.Color.textSecondary)
             }
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 0) {
@@ -150,11 +158,20 @@ struct AdapterRow: View {
             }
             .font(Astryx.Font.supporting).monospacedDigit()
             .foregroundStyle(Astryx.Color.textSecondary)
-            Circle().fill(adapter.hasRouter ? Astryx.Color.success : Astryx.Color.textDisabled)
+            Circle().fill(!adapter.hasRouter ? Astryx.Color.textDisabled
+                          : link?.coolingDown == true ? Astryx.Color.textWarning : Astryx.Color.success)
                 .frame(width: 8, height: 8)
         }
         .padding(.horizontal, Astryx.space(3))
         .padding(.vertical, Astryx.space(2.5))
+    }
+
+    private var detail: String {
+        guard adapter.hasRouter else { return "No internet" }
+        let ip = adapter.ipv4 ?? "IPv6 only"
+        guard let link else { return ip }
+        if link.coolingDown { return "\(ip) · link failed, retrying soon" }
+        return "\(ip) · \(link.active) open"
     }
 
     private var symbol: String {
@@ -172,6 +189,7 @@ struct AppRow: View {
     var app: AppEntry
     var policy: Policy
     var adapters: [Adapter]
+    var live: [(adapter: String, flows: Int)] // where its connections are open now, from the engine
     var onChange: (Policy) -> Void
 
     var body: some View {
@@ -184,7 +202,14 @@ struct AppRow: View {
                 }
             }
             .frame(width: 24, height: 24)
-            Text(app.name).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary).lineLimit(1)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(app.name).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary).lineLimit(1)
+                if !live.isEmpty {
+                    Text(live.map { "\(name($0.adapter)) \($0.flows)" }.joined(separator: " · "))
+                        .font(Astryx.Font.supporting).monospacedDigit()
+                        .foregroundStyle(Astryx.Color.textSecondary).lineLimit(1)
+                }
+            }
             Spacer(minLength: Astryx.space(2))
             Menu {
                 Button("All connections (combine)") { onChange(.combine) }
@@ -213,24 +238,14 @@ struct AppRow: View {
 
     private var isDefault: Bool { policy == .combine }
 
+    private func name(_ id: String) -> String { adapters.first { $0.id == id }?.name ?? id }
+
     private var label: String {
-        func name(_ id: String) -> String { adapters.first { $0.id == id }?.name ?? id }
-        return switch policy {
+        switch policy {
         case .combine: "All connections"
         case .only(let a): "Only \(name(a))"
         case .prefer(let a): "\(name(a)) first"
         case .custom(let r): r
         }
-    }
-}
-
-/// The engine (the root daemon that does the routing) is a separate program, not built yet.
-/// It writes this file while it runs, like net-merge's status.json.
-enum Engine {
-    static let statusPath = "/var/run/nethance/status.json"
-    static func isRunning() -> Bool {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: statusPath),
-              let modified = attrs[.modificationDate] as? Date else { return false }
-        return Date().timeIntervalSince(modified) < 5 // it rewrites the file every second
     }
 }
