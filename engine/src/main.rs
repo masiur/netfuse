@@ -121,11 +121,12 @@ struct Status {
     pid: u32,
     updated: u64,
     tunnel: String,
+    vpn: Option<String>, // a VPN is up and the engine stepped aside for it
     adapters: Vec<sched::AdapterStatus>,
     apps: Vec<sched::AppFlows>,
 }
 
-fn write_status(path: &Path, st: &State, tunnel: &str) {
+fn write_status(path: &Path, st: &State, tunnel: &str, vpn: Option<&str>) {
     let (mut adapters, apps) = st.sched.snapshot();
     if let Some((name, label)) = phone::label() {
         adapters.iter_mut().filter(|a| a.name == name).for_each(|a| a.label = Some(label.clone()));
@@ -134,6 +135,7 @@ fn write_status(path: &Path, st: &State, tunnel: &str) {
         pid: std::process::id(),
         updated: SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()),
         tunnel: tunnel.to_string(),
+        vpn: vpn.map(str::to_string),
         adapters,
         apps,
     };
@@ -245,7 +247,25 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
         let mut tick = 0u64;
         let mut tested = std::collections::HashSet::new(); // speedtest keys done this run
         let mut last = std::time::Instant::now();
+        let mut vpn: Option<String> = None; // stepped aside for this VPN's tunnel
         loop {
+            let now_vpn = tunnel::vpn(&tun_name);
+            if now_vpn != vpn {
+                match &now_vpn {
+                    Some(v) => {
+                        println!("VPN on {v}: stepping aside");
+                        tunnel::close_routes(&tun_name);
+                        vpn = now_vpn;
+                    }
+                    None => match tunnel::add_routes(&tun_name) {
+                        Ok(()) => {
+                            println!("VPN off: capturing again");
+                            vpn = None;
+                        }
+                        Err(e) => eprintln!("warning: routes: {e}"), // tried again next second
+                    },
+                }
+            }
             bg.sched.tick(last.elapsed().as_secs_f64().max(0.001));
             last = std::time::Instant::now();
             if on_flag.as_ref().is_some_and(|f| !f.exists()) {
@@ -286,7 +306,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
                 bg.sched.set_disabled(rules.disabled.clone());
                 *bg.rules.write().unwrap() = rules;
             }
-            write_status(&status_for_bg, &bg, &tun_name);
+            write_status(&status_for_bg, &bg, &tun_name, vpn.as_deref());
             tick += 1;
             tokio::time::sleep(Duration::from_secs(1)).await;
         }

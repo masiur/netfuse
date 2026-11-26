@@ -80,7 +80,10 @@ struct MenuView: View {
     }
 
     @ViewBuilder private var state: some View {
-        if engine != nil {
+        if let vpn = engine?.vpn {
+            Badge(text: "Paused for VPN", tone: .neutral)
+                .help("A VPN (\(vpn)) is connected, so all traffic goes through it. Netfuse resumes when it disconnects.")
+        } else if engine != nil {
             Badge(text: "Combining", tone: .success)
         } else if !isOn {
             Badge(text: "Off", tone: .neutral).help("Rules are saved and apply when Netfuse is on.")

@@ -15,6 +15,7 @@ struct EngineStatus: Decodable, Sendable {
         var flows: Int
     }
     var updated: TimeInterval
+    var vpn: String?          // a VPN is up on this tunnel; the engine stepped aside for it
     var adapters: [Link]
     var apps: [Flows]
 
