@@ -44,6 +44,8 @@ struct Rules {
     apps: HashMap<String, Route>,
     default: Route,
     disabled: Vec<String>,
+    /// Keep capturing while a VPN is up (its traffic then skips the VPN). Off: step aside.
+    keep_with_vpn: bool,
 }
 
 impl State {
@@ -72,6 +74,8 @@ struct RulesFile {
     /// Empty = combine every adapter.
     #[serde(default)]
     order: Vec<String>,
+    #[serde(default)]
+    keep_with_vpn: bool,
 }
 
 /// "en4 > en0 > *": each adapter in turn, then anything left.
@@ -104,7 +108,7 @@ fn load_rules(path: &Path) -> Rules {
             }
         })
         .collect();
-    Rules { apps, default: order_route(&file.order), disabled: file.disabled }
+    Rules { apps, default: order_route(&file.order), disabled: file.disabled, keep_with_vpn: file.keep_with_vpn }
 }
 
 /// The menu-bar app saves rules for the user who runs it; under sudo that is SUDO_USER.
@@ -249,7 +253,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
         let mut last = std::time::Instant::now();
         let mut vpn: Option<String> = None; // stepped aside for this VPN's tunnel
         loop {
-            let now_vpn = tunnel::vpn(&tun_name);
+            let now_vpn = if bg.rules.read().unwrap().keep_with_vpn { None } else { tunnel::vpn(&tun_name) };
             if now_vpn != vpn {
                 match &now_vpn {
                     Some(v) => {

@@ -1,3 +1,4 @@
+import ServiceManagement
 import UniformTypeIdentifiers
 import AppKit
 import Charts
@@ -9,6 +10,7 @@ final class DetailsFocus {
     static let shared = DetailsFocus()
     static let overview = "overview"
     static let routes = "routes" // the app routes page
+    static let settings = "settings"
     var selection: String = overview
 }
 
@@ -43,6 +45,7 @@ struct DetailsView: View {
             List(selection: $focus.selection) {
                 Label("Overview", systemImage: "square.grid.2x2").tag(DetailsFocus.overview)
                 Label("App routes", systemImage: "arrow.triangle.branch").tag(DetailsFocus.routes)
+                Label("Settings", systemImage: "gearshape").tag(DetailsFocus.settings)
                 Section("Connections") {
                     ForEach(monitor.adapters) { a in
                         SidebarRow(adapter: a, online: monitor.isOnline(a)).tag(a.id)
@@ -53,7 +56,9 @@ struct DetailsView: View {
         } detail: {
             ScrollView {
                 Group {
-                    if focus.selection == DetailsFocus.routes {
+                    if focus.selection == DetailsFocus.settings {
+                        SettingsPage()
+                    } else if focus.selection == DetailsFocus.routes {
                         AppRoutesPage(monitor: monitor)
                     } else if let a = monitor.adapters.first(where: { $0.id == focus.selection }) {
                         AdapterPage(adapter: a, monitor: monitor)
@@ -90,6 +95,53 @@ private struct SidebarRow: View {
             Spacer(minLength: 0)
             Circle().fill(online ? Astryx.Color.success : Astryx.Color.textDisabled).frame(width: 7, height: 7)
         }
+    }
+}
+
+// MARK: settings
+
+private struct SettingsPage: View {
+    private var rules = RuleStore.shared
+    @State private var atLogin = SMAppService.mainApp.status == .enabled
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Astryx.space(5)) {
+            Text("Settings").font(Astryx.Font.h3).foregroundStyle(Astryx.Color.textPrimary)
+            TitledCard("VPN") {
+                VStack(alignment: .leading, spacing: Astryx.space(2)) {
+                    Picker("When a VPN connects", selection: Binding(get: { rules.keepWithVPN }, set: rules.setKeepWithVPN)) {
+                        Text("Pause Netfuse").tag(false)
+                        Text("Keep combining").tag(true)
+                    }
+                    .pickerStyle(.radioGroup)
+                    Text(rules.keepWithVPN
+                         ? "Traffic is combined across your connections and does not go through the VPN."
+                         : "All traffic goes through the VPN. Netfuse resumes when it disconnects. Recommended.")
+                        .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                }
+                .padding(Astryx.space(4))
+            }
+            TitledCard("General") {
+                VStack(alignment: .leading, spacing: Astryx.space(2)) {
+                    Toggle("Open Netfuse at login", isOn: Binding(get: { atLogin }, set: setLogin))
+                    if let error {
+                        Text(error).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
+                    }
+                }
+                .padding(Astryx.space(4))
+            }
+        }
+    }
+
+    private func setLogin(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+        atLogin = SMAppService.mainApp.status == .enabled
     }
 }
 

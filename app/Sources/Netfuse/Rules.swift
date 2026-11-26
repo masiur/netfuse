@@ -47,6 +47,8 @@ final class RuleStore {
     /// Priority order: apps without a rule use the first working adapter, then the next.
     /// Empty = combine every adapter.
     private(set) var order: [String] = []
+    /// Keep combining while a VPN is connected; off (default): Netfuse steps aside for it.
+    private(set) var keepWithVPN = false
     private(set) var lastError: String?
     let url: URL
 
@@ -92,6 +94,11 @@ final class RuleStore {
         save()
     }
 
+    func setKeepWithVPN(_ on: Bool) {
+        keepWithVPN = on
+        save()
+    }
+
     /// `ids` in priority order; ones not in the order yet go last.
     func sorted(_ ids: [String]) -> [String] {
         ids.sorted { (order.firstIndex(of: $0) ?? .max) < (order.firstIndex(of: $1) ?? .max) }
@@ -102,6 +109,12 @@ final class RuleStore {
         var rules: [String: String]
         var disabled: [String]?
         var order: [String]?
+        var keepWithVpn: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case version, rules, disabled, order
+            case keepWithVpn = "keep_with_vpn"
+        }
     }
 
     func load() {
@@ -111,6 +124,7 @@ final class RuleStore {
             rules = f.rules.mapValues(Policy.init(route:)).filter { $0.value != .combine }
             disabled = f.disabled ?? []
             order = f.order ?? []
+            keepWithVPN = f.keepWithVpn ?? false
         } catch {
             lastError = "rules.json: \(error.localizedDescription)"
         }
@@ -121,7 +135,7 @@ final class RuleStore {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try enc.encode(File(rules: rules.mapValues(\.route), disabled: disabled, order: order)).write(to: url, options: .atomic)
+            try enc.encode(File(rules: rules.mapValues(\.route), disabled: disabled, order: order, keepWithVpn: keepWithVPN ? true : nil)).write(to: url, options: .atomic)
             lastError = nil
         } catch {
             lastError = "Could not save rules: \(error.localizedDescription)"
