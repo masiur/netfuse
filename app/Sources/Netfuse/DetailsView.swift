@@ -263,6 +263,15 @@ private struct OverviewPage: View {
             PageHeader(symbol: "point.3.connected.trianglepath.dotted", title: "All connections",
                        subtitle: "\(monitor.adapters.filter(monitor.isOnline).count) online · " + engineState,
                        rx: monitor.totalRx, tx: monitor.totalTx)
+            if let rec = recommend(monitor.adapters, engine: monitor.engine),
+               let best = monitor.adapters.first(where: { $0.id == rec.id }) {
+                TitledCard("Recommendation") {
+                    RecommendationRow(name: best.name, reason: rec.reason) {
+                        let ids = monitor.adapters.map(\.id)
+                        RuleStore.shared.setOrdered(true, ids: [rec.id] + ids.filter { $0 != rec.id })
+                    }
+                }
+            }
             TitledCard("Traffic · last 10 minutes") { TrafficChart(samples: combined).padding(Astryx.space(4)) }
             TitledCard("Connections") {
                 ForEach(Array(monitor.adapters.enumerated()), id: \.element.id) { i, a in

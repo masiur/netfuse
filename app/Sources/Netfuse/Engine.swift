@@ -8,6 +8,8 @@ struct EngineStatus: Decodable, Sendable {
         var coolingDown: Bool // its link just failed; new connections avoid it for a while
         var label: String?    // a name macOS has none for: the Android phone's model
         var capacity: Double? // bytes/s the engine estimates it can carry; flows are shared by it
+        var total: Int?       // connections relayed since the engine started
+        var failed: Int?      // of those, how many found the link itself down
     }
     struct Flows: Decodable, Sendable {
         var app: String       // "" when the engine could not tell which app it was

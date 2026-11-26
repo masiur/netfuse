@@ -310,3 +310,36 @@ struct PublicInfo: Sendable {
         return PublicInfo(ip: ip, isp: org.isEmpty ? "Unknown" : org, place: place, localIP: localIP, fetched: Date())
     }
 }
+
+/// Which connection is best to use first, and why.
+struct Recommendation: Equatable {
+    var id: String
+    var reason: String
+}
+
+/// Measured speed and reliability while the engine runs; otherwise cable over Wi-Fi over phone,
+/// then the faster link the driver reports.
+func recommend(_ adapters: [Adapter], engine: EngineStatus?) -> Recommendation? {
+    guard adapters.count > 1 else { return nil }
+    if let engine {
+        func score(_ a: Adapter) -> Double? {
+            guard let l = engine.link(a.id), let cap = l.capacity, cap > 0, !l.coolingDown else { return nil }
+            let total = Double(max(l.total ?? 0, 1))
+            return cap * (1 - Double(l.failed ?? 0) / total)
+        }
+        let scored = adapters.compactMap { a in score(a).map { (a, $0) } }.sorted { $0.1 > $1.1 }
+        if let best = scored.first {
+            guard scored.count > 1 else { return Recommendation(id: best.0.id, reason: "The only connection working right now") }
+            let next = scored[1]
+            let times = best.1 / max(next.1, 1)
+            let why = times >= 1.2 ? String(format: "%.1f× faster than %@ in Netfuse's measurements", times, next.0.name)
+                                   : "As fast as \(next.0.name), with fewer failures"
+            return Recommendation(id: best.0.id, reason: why)
+        }
+    }
+    let rank: (Adapter) -> Int = { [.ethernet: 0, .wifi: 1, .android: 2, .iPhone: 2][$0.kind] ?? 3 }
+    let best = adapters.filter(\.hasRouter).min { (rank($0), -Int($0.linkSpeed / 1000)) < (rank($1), -Int($1.linkSpeed / 1000)) }
+    return best.map { Recommendation(id: $0.id, reason: $0.kind == .ethernet
+        ? "Cable is usually steadier than wireless. Turn Netfuse on to measure."
+        : "Fastest link the system reports. Turn Netfuse on to measure.") }
+}

@@ -144,6 +144,14 @@ struct MenuView: View {
             .help("Priority order: apps without a rule use the first connection while it works, then the next.")
             Divider().overlay(Astryx.Color.border)
         }
+        if let rec = recommend(monitor.adapters, engine: engine),
+           let best = monitor.adapters.first(where: { $0.id == rec.id }),
+           !(ordered && rules.sorted(ids).first == rec.id) {
+            RecommendationRow(name: best.name, reason: rec.reason) {
+                rules.setOrdered(true, ids: [rec.id] + ids.filter { $0 != rec.id })
+            }
+            Divider().overlay(Astryx.Color.border)
+        }
         let list = ordered ? rules.sorted(ids).compactMap { id in monitor.adapters.first { $0.id == id } } : monitor.adapters
         ForEach(Array(list.enumerated()), id: \.element.id) { i, a in
             if i > 0 { Divider().overlay(Astryx.Color.border) }
@@ -381,6 +389,28 @@ private struct IPhoneHint: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Astryx.space(3))
+    }
+}
+
+/// "Ethernet is the better connection" with a button that puts it first in the priority order.
+struct RecommendationRow: View {
+    var name: String
+    var reason: String
+    var apply: () -> Void
+
+    var body: some View {
+        HStack(spacing: Astryx.space(3)) {
+            Image(systemName: "sparkles").foregroundStyle(Astryx.Color.success).frame(width: 28)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Best: \(name)").font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
+                Text(reason).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: Astryx.space(2))
+            Button("Use first", action: apply).buttonStyle(AstryxButtonStyle(primary: true))
+                .help("Priority order with \(name) first: apps without a rule use it while it works, then the others.")
+        }
         .padding(Astryx.space(3))
     }
 }

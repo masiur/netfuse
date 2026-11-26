@@ -82,3 +82,20 @@ import Testing
     #expect(j["disabled"] as? [String] == ["en7"])
     #expect(RuleStore(url: url).order == ["en4", "en0", "en7"])
 }
+
+@Test func recommendsTheMeasuredFasterLinkElseCable() {
+    let wifi = Adapter(id: "en0", name: "Wi-Fi", kind: .wifi, ipv4: "1", router: "r", mac: nil, linkSpeed: 866_000_000)
+    let cable = Adapter(id: "en5", name: "Ethernet", kind: .ethernet, ipv4: "2", router: "r", mac: nil, linkSpeed: 100_000_000)
+    #expect(recommend([wifi], engine: nil) == nil)
+    #expect(recommend([wifi, cable], engine: nil)?.id == "en5")
+    let json = #"""
+    {"updated": 9e9, "apps": [], "adapters": [
+        {"name": "en0", "active": 1, "cooling_down": false, "capacity": 9000000, "total": 10, "failed": 0},
+        {"name": "en5", "active": 1, "cooling_down": false, "capacity": 3000000, "total": 10, "failed": 0}]}
+    """#
+    let engine = EngineStatus.decode(Data(json.utf8), now: Date(timeIntervalSince1970: 9e9))
+    #expect(engine != nil)
+    let r = recommend([wifi, cable], engine: engine)
+    #expect(r?.id == "en0")
+    #expect(r?.reason.hasPrefix("3.0× faster than Ethernet") == true)
+}
