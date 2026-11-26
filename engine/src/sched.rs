@@ -1,7 +1,13 @@
-//! Picks an adapter for each new flow: per-app routes, least busy within a route tier, and a
-//! cooldown for adapters whose link just failed.
+//! Picks an adapter for each new flow: per-app routes, the least busy for its speed within a route
+//! tier, and a cooldown for adapters whose link just failed.
+//!
+//! Speed: each adapter's capacity is the most it has carried recently (bytes relayed per second,
+//! decaying with a 10-minute half-life), never below what a download test measured when it
+//! appeared. A flow goes where (open flows + 1) / capacity is lowest, so an adapter twice as fast
+//! gets about twice the flows.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -42,6 +48,17 @@ pub fn route_text(r: &Route) -> String {
     r.iter().map(|t| t.join("+")).collect::<Vec<_>>().join(" > ")
 }
 
+/// Until measured, an adapter counts as this fast (1 Mbit/s), so it still gets some flows.
+const FLOOR: f64 = 125_000.0;
+const HALF_LIFE_SECS: f64 = 600.0;
+
+/// Bytes relayed through one adapter; the flows on it add to it.
+#[derive(Default)]
+pub struct Meter {
+    pub rx: AtomicU64,
+    pub tx: AtomicU64,
+}
+
 struct Slot {
     adapter: Adapter,
     present: bool,
@@ -49,6 +66,33 @@ struct Slot {
     total: u64,
     failed: u64,
     down_until: Option<Instant>,
+    meter: Arc<Meter>,
+    last_bytes: (u64, u64),
+    rate: (f64, f64), // bytes/s in the last tick (down, up)
+    peak: f64,        // decaying peak of down + up
+    tested: f64,      // download test result, bytes/s
+}
+
+impl Slot {
+    fn new(adapter: Adapter) -> Self {
+        Slot {
+            adapter,
+            present: true,
+            active: 0,
+            total: 0,
+            failed: 0,
+            down_until: None,
+            meter: Arc::default(),
+            last_bytes: (0, 0),
+            rate: (0.0, 0.0),
+            peak: 0.0,
+            tested: 0.0,
+        }
+    }
+
+    fn capacity(&self) -> f64 {
+        self.peak.max(self.tested).max(FLOOR)
+    }
 }
 
 #[derive(Default)]
@@ -64,6 +108,7 @@ pub struct Scheduler(Mutex<Inner>);
 /// An adapter handed to one flow. Dropping it ends the flow's claim.
 pub struct Lease {
     pub adapter: Adapter,
+    pub meter: Arc<Meter>,
     app: String,
     sched: Arc<Scheduler>,
 }
@@ -93,6 +138,9 @@ pub struct AdapterStatus {
     pub total: u64,
     pub failed: u64,
     pub cooling_down: bool,
+    pub rate_down: f64, // bytes/s
+    pub rate_up: f64,
+    pub capacity: f64, // bytes/s, the estimate flows are shared by
     /// A display name when macOS has none for it (the phone's model, "HONOR DNY-NX9").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -119,7 +167,7 @@ impl Scheduler {
                     sl.present = true;
                     sl.adapter = a;
                 }
-                None => s.slots.push(Slot { adapter: a, present: true, active: 0, total: 0, failed: 0, down_until: None }),
+                None => s.slots.push(Slot::new(a)),
             }
         }
         s.slots.retain(|sl| sl.present || sl.active > 0);
@@ -159,13 +207,34 @@ impl Scheduler {
         }
         s.turn = s.turn.wrapping_add(1);
         let start = s.turn % pool.len();
-        let i = (0..pool.len()).map(|k| pool[(start + k) % pool.len()]).min_by_key(|&i| s.slots[i].active)?;
+        let load = |i: usize| f64::from(s.slots[i].active + 1) / s.slots[i].capacity();
+        let i = (0..pool.len())
+            .map(|k| pool[(start + k) % pool.len()])
+            .min_by(|&a, &b| load(a).total_cmp(&load(b)))?; // first of equals: the rotation spreads ties
         let sl = &mut s.slots[i];
         sl.active += 1;
         sl.total += 1;
-        let adapter = sl.adapter.clone();
+        let (adapter, meter) = (sl.adapter.clone(), sl.meter.clone());
         *s.apps.entry((app.to_string(), adapter.name.clone())).or_default() += 1;
-        Some(Lease { adapter, app: app.to_string(), sched: self.clone() })
+        Some(Lease { adapter, meter, app: app.to_string(), sched: self.clone() })
+    }
+
+    /// Called once a second: turns the byte counts into rates and updates each capacity estimate.
+    pub fn tick(&self, secs: f64) {
+        let decay = 0.5f64.powf(secs / HALF_LIFE_SECS);
+        for sl in &mut self.0.lock().unwrap().slots {
+            let now = (sl.meter.rx.load(Ordering::Relaxed), sl.meter.tx.load(Ordering::Relaxed));
+            sl.rate = ((now.0 - sl.last_bytes.0) as f64 / secs, (now.1 - sl.last_bytes.1) as f64 / secs);
+            sl.last_bytes = now;
+            sl.peak = (sl.peak * decay).max(sl.rate.0 + sl.rate.1);
+        }
+    }
+
+    /// Records a download test's result (bytes/s).
+    pub fn tested(&self, name: &str, speed: f64) {
+        if let Some(sl) = self.0.lock().unwrap().slots.iter_mut().find(|sl| sl.adapter.name == name) {
+            sl.tested = speed;
+        }
     }
 
     /// Sidelines an adapter whose link itself failed (no route, network down) for a while.
@@ -191,6 +260,9 @@ impl Scheduler {
                 total: sl.total,
                 failed: sl.failed,
                 cooling_down: sl.down_until.is_some_and(|t| t > now),
+                rate_down: sl.rate.0,
+                rate_up: sl.rate.1,
+                capacity: sl.capacity(),
                 label: None,
             })
             .collect();
@@ -255,5 +327,29 @@ mod tests {
         let (adapters, apps) = s.snapshot();
         assert!(apps.is_empty());
         assert!(adapters.iter().all(|a| a.active == 0 && a.total == 1));
+    }
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::*;
+
+    #[test]
+    fn faster_adapters_get_more_flows() {
+        let s = Arc::new(Scheduler::default());
+        let ad = |n: &str| Adapter { name: n.into(), index: 1, ip: [10, 0, 0, 1].into() };
+        s.update(vec![ad("fast"), ad("slow")]);
+        s.tested("fast", 3_000_000.0);
+        s.tested("slow", 1_000_000.0);
+        let leases: Vec<_> = (0..40).map(|_| s.acquire(&Route::new(), &[], "x").unwrap()).collect();
+        let fast = leases.iter().filter(|l| l.adapter.name == "fast").count();
+        assert_eq!(fast, 30, "3x the speed should get 3/4 of the flows");
+
+        // what a flow relays raises its adapter's estimate
+        leases.iter().find(|l| l.adapter.name == "slow").unwrap().meter.rx.fetch_add(9_000_000, Ordering::Relaxed);
+        s.tick(1.0);
+        let (adapters, _) = s.snapshot();
+        let slow = adapters.iter().find(|a| a.name == "slow").unwrap();
+        assert_eq!((slow.rate_down, slow.capacity), (9_000_000.0, 9_000_000.0));
     }
 }

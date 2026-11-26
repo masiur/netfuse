@@ -147,7 +147,13 @@ private struct ConnectionRow: View {
             }
             Spacer()
             if let link = monitor.engine?.link(adapter.id) {
-                Text("\(link.active) open").font(Astryx.Font.supporting).monospacedDigit().foregroundStyle(Astryx.Color.textSecondary)
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(link.capacity.map { "~" + speedText($0) } ?? "").font(Astryx.Font.label).monospacedDigit()
+                        .foregroundStyle(Astryx.Color.textPrimary)
+                    Text("\(link.active) open · \(monitor.engine?.share(adapter.id).map { "\(Int(($0 * 100).rounded())) %" } ?? "–")")
+                        .font(Astryx.Font.supporting).monospacedDigit().foregroundStyle(Astryx.Color.textSecondary)
+                }
+                .help("Estimated speed, open connections, and the share of new connections it gets")
             }
             Rate(symbol: "arrow.down", value: adapter.rxBytesPerSec, color: Astryx.Color.download).frame(width: 120, alignment: .trailing)
             Rate(symbol: "arrow.up", value: adapter.txBytesPerSec, color: Astryx.Color.upload).frame(width: 120, alignment: .trailing)
@@ -236,6 +242,8 @@ private struct AdapterPage: View {
                     KeyValue("MAC address", adapter.mac)
                     KeyValue("Link speed", adapter.linkSpeed > 0 ? "\(adapter.linkSpeed / 1_000_000) Mbit/s" : nil)
                     KeyValue("Open connections", monitor.engine?.link(adapter.id).map { "\($0.active)" })
+                    KeyValue("Estimated speed", monitor.engine?.link(adapter.id)?.capacity.map(speedText))
+                    KeyValue("Share of new connections", monitor.engine?.share(adapter.id).map { "\(Int(($0 * 100).rounded())) %" })
                     KeyValue("Since app start", monitor.totals[adapter.id].map { "↓ \(bytesText($0.rx))  ↑ \(bytesText($0.tx))" }, last: true)
                 }
             }

@@ -7,6 +7,7 @@ struct EngineStatus: Decodable, Sendable {
         var active: Int       // open connections
         var coolingDown: Bool // its link just failed; new connections avoid it for a while
         var label: String?    // a name macOS has none for: the Android phone's model
+        var capacity: Double? // bytes/s the engine estimates it can carry; flows are shared by it
     }
     struct Flows: Decodable, Sendable {
         var app: String       // "" when the engine could not tell which app it was
@@ -34,6 +35,13 @@ struct EngineStatus: Decodable, Sendable {
     }
 
     func link(_ adapter: String) -> Link? { adapters.first { $0.name == adapter } }
+
+    /// The part of new connections an adapter gets: its capacity over all of them (0...1).
+    func share(_ adapter: String) -> Double? {
+        let total = adapters.reduce(0) { $0 + ($1.capacity ?? 0) }
+        guard total > 0, let c = link(adapter)?.capacity else { return nil }
+        return c / total
+    }
 
     /// Where an app's connections are open now, busiest adapter first.
     func flows(for app: String) -> [(adapter: String, flows: Int)] {

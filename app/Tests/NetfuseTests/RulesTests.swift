@@ -52,6 +52,7 @@ import Testing
     #expect(s.link("en0")?.coolingDown == true)
     #expect(s.link("en0")?.label == nil)
     #expect(s.link("feth7700")?.label == "HONOR DNY-NX9")
+    #expect(s.share("en0") == nil) // no capacities in this file
     #expect(s.flows(for: "curl").map(\.adapter) == ["en10", "en0"])
     #expect(EngineStatus.decode(json, now: Date(timeIntervalSince1970: 1010)) == nil) // stale: engine stopped
 }

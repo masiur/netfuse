@@ -10,6 +10,7 @@ mod relay;
 mod rndis;
 mod sched;
 mod scoped;
+mod speedtest;
 mod tunnel;
 
 use std::collections::HashMap;
@@ -210,13 +211,35 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
     tokio::spawn(async move {
         let mut mtime = None;
         let mut tick = 0u64;
+        let mut tested = std::collections::HashSet::new(); // speedtest keys done this run
+        let mut last = std::time::Instant::now();
         loop {
+            bg.sched.tick(last.elapsed().as_secs_f64().max(0.001));
+            last = std::time::Instant::now();
             if on_flag.as_ref().is_some_and(|f| !f.exists()) {
                 off.notify_one();
                 return;
             }
             if tick % 3 == 0 {
-                bg.sched.update(adapters::discover());
+                let found = adapters::discover();
+                bg.sched.update(found.clone());
+                for a in found {
+                    let key = speedtest::key(&a);
+                    if !tested.insert(key.clone()) {
+                        continue;
+                    }
+                    if let Some(speed) = speedtest::cached(&key) {
+                        bg.sched.tested(&a.name, speed);
+                        continue;
+                    }
+                    let sched = bg.sched.clone();
+                    tokio::task::spawn_blocking(move || {
+                        if let Some(speed) = speedtest::measure(&a.name, &key) {
+                            println!("{}: download test {:.0} Mbit/s", a.name, speed * 8.0 / 1e6);
+                            sched.tested(&a.name, speed);
+                        }
+                    });
+                }
                 if let Err(e) = scoped::sync() {
                     eprintln!("warning: scoped routes: {e}");
                 }
@@ -238,6 +261,12 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
 
     let mut cfg = IpStackConfig::default();
     cfg.mtu(tunnel::MTU).map_err(std::io::Error::other)?;
+    // The stack has no window scaling, so 64 KB is the most a flow can have in flight to the app
+    // and the most it can be sent; the 16 KB defaults cap each flow at a quarter of that.
+    let mut tcp = ipstack::TcpConfig::default();
+    tcp.max_unacked_bytes = u16::MAX.into();
+    tcp.read_buffer_size = u16::MAX.into();
+    cfg.tcp_config = Arc::new(tcp);
     let mut stack = IpStack::new(cfg, tun.io);
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let stop_at = tokio::time::Instant::now() + limit.unwrap_or(Duration::from_secs(1 << 40));
