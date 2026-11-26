@@ -207,6 +207,10 @@ struct MenuView: View {
             Button("App routes…") { showDetails(DetailsFocus.routes) }.buttonStyle(AstryxButtonStyle())
             Button("Details") { showDetails(nil) }.buttonStyle(AstryxButtonStyle())
             Spacer()
+            Button { NSWorkspace.shared.open(URL(string: "https://github.com/masiur/netfuse/issues/new")!) } label: {
+                Image(systemName: "exclamationmark.bubble")
+            }
+            .buttonStyle(AstryxButtonStyle()).help("Report an issue on GitHub")
             Button("Quit") { NSApp.terminate(nil) }.buttonStyle(AstryxButtonStyle())
         }
     }

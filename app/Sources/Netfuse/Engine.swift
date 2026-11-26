@@ -99,18 +99,30 @@ enum EngineSwitch {
         else { throw Failure("The engine is not inside this copy of Netfuse. Build it with scripts/bundle.sh.") }
         let fm = FileManager.default
         if !force, fm.fileExists(atPath: plist), fm.contentsEqual(atPath: engine.path, andPath: installedBinary) { return }
+        try asAdmin([script.path, engine.path, fm.homeDirectoryForCurrentUser.path],
+                    prompt: "Netfuse needs to install its routing engine.")
+    }
+
+    /// Stops the engine and removes it from the system. The app stays; switching on installs it again.
+    static func uninstall() throws {
+        guard let script = Bundle.main.resourceURL?.appending(path: "install-engine.sh") else { return }
+        if isOn { try FileManager.default.removeItem(at: flag) }
+        try asAdmin([script.path, "--uninstall"], prompt: "Netfuse will remove its routing engine.")
+    }
+
+    /// Runs one command as root after macOS asks for an administrator password.
+    static func asAdmin(_ args: [String], prompt: String) throws {
         // AppleScript's own quoting, so paths with spaces or quotes stay one argument.
         func lit(_ s: String) -> String {
             "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
         }
-        let cmd = [script.path, engine.path, fm.homeDirectoryForCurrentUser.path].map { "quoted form of \(lit($0))" }
-            .joined(separator: " & \" \" & ")
+        let cmd = args.map { "quoted form of \(lit($0))" }.joined(separator: " & \" \" & ")
         var err: NSDictionary?
-        NSAppleScript(source: "do shell script \(cmd) with administrator privileges "
-                      + "with prompt \"Netfuse needs to install its routing engine.\"")?.executeAndReturnError(&err)
+        NSAppleScript(source: "do shell script \(cmd) with administrator privileges with prompt \(lit(prompt))")?
+            .executeAndReturnError(&err)
         if let err {
             if err[NSAppleScript.errorNumber] as? Int == -128 { throw Failure(nil) } // password prompt cancelled
-            throw Failure("Could not install the engine: \(err[NSAppleScript.errorMessage] ?? "unknown error")")
+            throw Failure("\(err[NSAppleScript.errorMessage] ?? "unknown error")")
         }
     }
 

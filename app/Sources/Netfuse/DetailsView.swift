@@ -104,6 +104,7 @@ private struct SettingsPage: View {
     private var rules = RuleStore.shared
     @State private var atLogin = SMAppService.mainApp.status == .enabled
     @State private var error: String?
+    @AppStorage("alertDrops") private var alertDrops = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: Astryx.space(5)) {
@@ -125,13 +126,59 @@ private struct SettingsPage: View {
             TitledCard("General") {
                 VStack(alignment: .leading, spacing: Astryx.space(2)) {
                     Toggle("Open Netfuse at login", isOn: Binding(get: { atLogin }, set: setLogin))
+                    Toggle("Alert when a connection drops or comes back", isOn: $alertDrops)
                     if let error {
                         Text(error).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
                     }
                 }
                 .padding(Astryx.space(4))
             }
+            TitledCard("Network") {
+                HStack(spacing: Astryx.space(2)) {
+                    Button("Flush DNS cache") {
+                        run { try EngineSwitch.asAdmin(["/bin/sh", "-c", "dscacheutil -flushcache; killall -HUP mDNSResponder"],
+                                                       prompt: "Netfuse will clear the DNS cache.") }
+                    }
+                    .help("Forgets cached website addresses. Helps when a site moved or will not load.")
+                    Button("Network Settings…") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Network-Settings.extension")!)
+                    }
+                    Spacer()
+                }
+                .buttonStyle(AstryxButtonStyle())
+                .padding(Astryx.space(4))
+            }
+            TitledCard("Help") {
+                HStack(spacing: Astryx.space(2)) {
+                    Button("Report an issue…") { NSWorkspace.shared.open(Self.repo.appending(path: "issues/new")) }
+                    Button("Project on GitHub") { NSWorkspace.shared.open(Self.repo) }
+                    Spacer()
+                    Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")")
+                        .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                }
+                .buttonStyle(AstryxButtonStyle())
+                .padding(Astryx.space(4))
+            }
+            TitledCard("Remove") {
+                HStack(spacing: Astryx.space(2)) {
+                    Text("Stops Netfuse and removes its routing engine from this Mac. Your app routes are kept.")
+                        .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                    Spacer()
+                    Button("Uninstall engine…") { run(EngineSwitch.uninstall) }
+                }
+                .buttonStyle(AstryxButtonStyle())
+                .padding(Astryx.space(4))
+            }
+            if let error {
+                Text(error).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
+            }
         }
+    }
+
+    static let repo = URL(string: "https://github.com/masiur/netfuse")!
+
+    private func run(_ f: () throws -> Void) {
+        do { try f(); error = nil } catch let e as EngineSwitch.Failure { error = e.message } catch { self.error = error.localizedDescription }
     }
 
     private func setLogin(_ on: Bool) {
@@ -336,6 +383,11 @@ private struct AppsTable: View {
 private struct AdapterPage: View {
     var adapter: Adapter
     var monitor: AdapterMonitor
+    @State private var error: String?
+
+    private func act(_ f: () throws -> Void) {
+        do { try f(); error = nil } catch let e as EngineSwitch.Failure { error = e.message } catch { self.error = error.localizedDescription }
+    }
 
     var body: some View {
         let online = monitor.isOnline(adapter)
@@ -364,6 +416,31 @@ private struct AdapterPage: View {
                     KeyValue("Share of new connections", monitor.engine?.share(adapter.id).map { "\(Int(($0 * 100).rounded())) %" })
                     KeyValue("Since app start", monitor.totals[adapter.id].map { "↓ \(bytesText($0.rx))  ↑ \(bytesText($0.tx))" }, last: true)
                 }
+            }
+            TitledCard("Manage") {
+                HStack(spacing: Astryx.space(2)) {
+                    if adapter.router != nil {
+                        Button("Renew address") {
+                            act { try EngineSwitch.asAdmin(["/usr/sbin/ipconfig", "set", adapter.id, "DHCP"],
+                                                           prompt: "Netfuse will ask \(adapter.name) for a new address.") }
+                        }
+                        .help("Asks the router for a new address (DHCP). Fixes most \"connected but no internet\" cases.")
+                    }
+                    if adapter.kind == .wifi {
+                        Button("Turn Wi-Fi off") {
+                            act { try shell("/usr/sbin/networksetup", "-setairportpower", adapter.id, "off") }
+                        }
+                    }
+                    Button("Network Settings…") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Network-Settings.extension")!)
+                    }
+                    Spacer()
+                    if let error {
+                        Text(error).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
+                    }
+                }
+                .buttonStyle(AstryxButtonStyle())
+                .padding(Astryx.space(4))
             }
         }
     }
@@ -565,4 +642,18 @@ private func shortMbit(_ v: Double) -> String {
 
 func bytesText(_ bytes: Double) -> String {
     ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+}
+
+/// Runs a command as the user; throws its error output if it fails.
+func shell(_ path: String, _ args: String...) throws {
+    let p = Process()
+    p.executableURL = URL(filePath: path)
+    p.arguments = args
+    let err = Pipe()
+    p.standardError = err
+    try p.run()
+    p.waitUntilExit()
+    if p.terminationStatus != 0 {
+        throw EngineSwitch.Failure(String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+    }
 }

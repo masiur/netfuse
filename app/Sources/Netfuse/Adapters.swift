@@ -1,3 +1,4 @@
+import UserNotifications
 import Darwin
 import Foundation
 import Observation
@@ -74,6 +75,7 @@ final class AdapterMonitor {
     func start() {
         guard !started else { return }
         started = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
         Task {
             while true {
                 refresh()
@@ -114,6 +116,25 @@ final class AdapterMonitor {
         }?.value.0
         usbPhone = out.contains { $0.id.hasPrefix("feth") } ? nil : usbPhones.first
         adapters = out.sorted { ($0.hasRouter ? 0 : 1, $0.id) < ($1.hasRouter ? 0 : 1, $1.id) }
+        alertChanges()
+    }
+
+    private var wasOnline: [String: String]? // id: name, nil until the first look
+
+    /// Posts a notification when a connection drops or comes back (Settings can turn it off).
+    private func alertChanges() {
+        let now = Dictionary(adapters.filter(isOnline).map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+        defer { wasOnline = now }
+        guard let before = wasOnline, UserDefaults.standard.object(forKey: "alertDrops") as? Bool ?? true else { return }
+        for (id, name) in before where now[id] == nil { notify("\(name) disconnected", "Netfuse carries on with the other connections.") }
+        for (id, name) in now where before[id] == nil { notify("\(name) connected", "Netfuse is using it too.") }
+    }
+
+    private func notify(_ title: String, _ body: String) {
+        let c = UNMutableNotificationContent()
+        c.title = title
+        c.body = body
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
     }
 
     /// Looks up each online adapter's public address and ISP, again after 10 minutes or when its
