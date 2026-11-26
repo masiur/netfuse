@@ -63,3 +63,22 @@ import Testing
     #expect((p.ip, p.isp, p.place) == ("115.127.217.90", "BRACNet Limited", "Dhaka, BD"))
     #expect(PublicInfo.parse(Data("rate limited".utf8), localIP: nil) == nil)
 }
+
+@Test func newerVersionCompare() {
+    #expect(isNewer("v1.2.0", than: "1.1.9"))
+    #expect(isNewer("v1.0.1", than: "1.0"))
+    #expect(!isNewer("v1.0.0", than: "1.0"))
+    #expect(!isNewer("v0.9.9", than: "1.0.0"))
+}
+
+@Test @MainActor func adapterOrderAndDisabledSave() throws {
+    let url = FileManager.default.temporaryDirectory.appending(path: "netfuse-\(UUID()).json")
+    let store = RuleStore(url: url)
+    store.setOrdered(true, ids: ["en0", "en4"])
+    store.move("en4", by: -1, ids: ["en0", "en4", "en7"])
+    store.setEnabled(false, "en7")
+    let j = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+    #expect(j["order"] as? [String] == ["en4", "en0", "en7"])
+    #expect(j["disabled"] as? [String] == ["en7"])
+    #expect(RuleStore(url: url).order == ["en4", "en0", "en7"])
+}

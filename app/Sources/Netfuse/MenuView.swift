@@ -19,15 +19,21 @@ struct MenuView: View {
             } else if notRunning {
                 banner("The engine is not running", button: "Reinstall") { try EngineSwitch.installIfNeeded(force: true) }
             }
-            section("Connections") { connections }
-            section("Apps") { appList }
+            // Side by side: the window is wide, and the app list no longer pushes everything down.
+            HStack(alignment: .top, spacing: Astryx.space(4)) {
+                section("Connections") { connections }.frame(width: 380)
+                section("Apps") { appList }.frame(width: 380)
+            }
+            if let msg = Updater.shared.status {
+                Text(msg).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+            }
             if let err = switchError ?? rules.lastError {
                 Text(err).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
             }
             footer
         }
         .padding(Astryx.space(4))
-        .frame(width: 380)
+        .frame(width: 380 * 2 + Astryx.space(4) * 3)
         .background(Astryx.Color.body)
         .task {
             while !Task.isCancelled {
@@ -127,12 +133,41 @@ struct MenuView: View {
         if monitor.adapters.isEmpty {
             emptyRow("No connections found")
         }
-        ForEach(Array(monitor.adapters.enumerated()), id: \.element.id) { i, a in
+        let ids = monitor.adapters.map(\.id)
+        let ordered = !rules.order.isEmpty
+        if monitor.adapters.count > 1 {
+            Picker("Mode", selection: Binding(get: { ordered }, set: { rules.setOrdered($0, ids: rules.sorted(ids)) })) {
+                Text("Combine all").tag(false)
+                Text("Priority order").tag(true)
+            }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+            .padding(Astryx.space(2))
+            .help("Priority order: apps without a rule use the first connection while it works, then the next.")
+            Divider().overlay(Astryx.Color.border)
+        }
+        let list = ordered ? rules.sorted(ids).compactMap { id in monitor.adapters.first { $0.id == id } } : monitor.adapters
+        ForEach(Array(list.enumerated()), id: \.element.id) { i, a in
             if i > 0 { Divider().overlay(Astryx.Color.border) }
-            AdapterRow(adapter: a, link: engine?.link(a.id))
-                .contentShape(Rectangle())
-                .onTapGesture { showDetails(a.id) }
-                .help("Show details")
+            let off = rules.isDisabled(a.id)
+            HStack(spacing: 0) {
+                AdapterRow(adapter: a, link: engine?.link(a.id), note: off ? "Turned off in Netfuse" : nil,
+                           rank: ordered ? i + 1 : nil)
+                    .opacity(off ? 0.5 : 1)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showDetails(a.id) }
+                    .help("Show details")
+                Menu {
+                    Button(off ? "Turn on" : "Turn off") { rules.setEnabled(off, a.id) }
+                    if ordered {
+                        Button("Move up") { rules.move(a.id, by: -1, ids: ids) }.disabled(i == 0)
+                        Button("Move down") { rules.move(a.id, by: 1, ids: ids) }.disabled(i == list.count - 1)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis").foregroundStyle(Astryx.Color.textSecondary)
+                }
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                .padding(.trailing, Astryx.space(3))
+            }
         }
         if let phone = monitor.usbPhone {
             if !monitor.adapters.isEmpty { Divider().overlay(Astryx.Color.border) }
@@ -168,9 +203,9 @@ struct MenuView: View {
                     }
                 }
             }
-            // Rows have a fixed height, so the list can be sized exactly: up to 7 rows, then it scrolls.
+            // Rows have a fixed height, so the list can be sized exactly: up to 10 rows, then it scrolls.
             ScrollView { rows }
-                .frame(height: CGFloat(min(apps.count, 7)) * (AppRow.height + 1) - 1)
+                .frame(height: CGFloat(min(apps.count, 10)) * (AppRow.height + 1) - 1)
                 .scrollBounceBehavior(.basedOnSize)
         }
     }
@@ -214,6 +249,7 @@ struct AdapterRow: View {
     var adapter: Adapter
     var link: EngineStatus.Link? // nil while the engine is off or not using this adapter
     var note: String? // in place of the address line
+    var rank: Int? // place in the priority order
 
     /// An Android phone's adapter has no router macOS knows of: the engine drives it, and lists it.
     private var online: Bool { adapter.hasRouter || link != nil }
@@ -221,18 +257,24 @@ struct AdapterRow: View {
     var body: some View {
         HStack(spacing: Astryx.space(3)) {
             Image(systemName: adapter.symbol)
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(online ? Astryx.Color.textPrimary : Astryx.Color.textDisabled)
-                .frame(width: 28, height: 28)
+                .frame(width: 36, height: 36)
                 .background(Astryx.Color.muted, in: RoundedRectangle(cornerRadius: Astryx.Radius.inner))
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: Astryx.space(1.5)) {
                     Text(adapter.name).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
                     Text(adapter.id).font(Astryx.Font.code).foregroundStyle(Astryx.Color.textSecondary)
+                    if let rank { Badge(text: "#\(rank)", tone: rank == 1 ? .success : .neutral) }
                 }
                 Text(detail).lineLimit(1)
                     .font(Astryx.Font.supporting)
                     .foregroundStyle(link?.coolingDown == true ? Astryx.Color.textWarning : Astryx.Color.textSecondary)
+                if note == nil, !specs.isEmpty {
+                    Text(specs).lineLimit(1)
+                        .font(Astryx.Font.supporting).monospacedDigit()
+                        .foregroundStyle(Astryx.Color.textSecondary)
+                }
             }
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 0) {
@@ -247,7 +289,16 @@ struct AdapterRow: View {
                 .frame(width: 8, height: 8)
         }
         .padding(.horizontal, Astryx.space(3))
-        .padding(.vertical, Astryx.space(2.5))
+        .padding(.vertical, Astryx.space(3.5))
+    }
+
+    /// Gateway, the driver's link rate, and what the engine measured it can carry.
+    private var specs: String {
+        var parts: [String] = []
+        if let r = adapter.router { parts.append("via \(r)") }
+        if adapter.linkSpeed > 0 { parts.append("link " + speedText(Double(adapter.linkSpeed) / 8)) }
+        if let c = link?.capacity, c > 0 { parts.append("capacity ~" + speedText(c)) }
+        return parts.joined(separator: " · ")
     }
 
     private var detail: String {

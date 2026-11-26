@@ -42,6 +42,11 @@ enum Policy: Hashable, Sendable {
 @MainActor @Observable
 final class RuleStore {
     private(set) var rules: [String: Policy] = [:]
+    /// Adapters (BSD names) switched off: the engine sends nothing through them.
+    private(set) var disabled: [String] = []
+    /// Priority order: apps without a rule use the first working adapter, then the next.
+    /// Empty = combine every adapter.
+    private(set) var order: [String] = []
     private(set) var lastError: String?
     let url: URL
 
@@ -64,9 +69,39 @@ final class RuleStore {
         save()
     }
 
+    func isDisabled(_ id: String) -> Bool { disabled.contains(id) }
+
+    func setEnabled(_ on: Bool, _ id: String) {
+        disabled.removeAll { $0 == id }
+        if !on { disabled.append(id) }
+        save()
+    }
+
+    /// Switches between combining (empty order) and priority order over `ids`.
+    func setOrdered(_ on: Bool, ids: [String]) {
+        order = on ? ids : []
+        save()
+    }
+
+    /// Moves an adapter one place up (-1) or down (+1) in the priority order of `ids`.
+    func move(_ id: String, by step: Int, ids: [String]) {
+        var o = sorted(ids)
+        guard let i = o.firstIndex(of: id), o.indices.contains(i + step) else { return }
+        o.swapAt(i, i + step)
+        order = o
+        save()
+    }
+
+    /// `ids` in priority order; ones not in the order yet go last.
+    func sorted(_ ids: [String]) -> [String] {
+        ids.sorted { (order.firstIndex(of: $0) ?? .max) < (order.firstIndex(of: $1) ?? .max) }
+    }
+
     private struct File: Codable {
         var version = 1
         var rules: [String: String]
+        var disabled: [String]?
+        var order: [String]?
     }
 
     func load() {
@@ -74,6 +109,8 @@ final class RuleStore {
         do {
             let f = try JSONDecoder().decode(File.self, from: data)
             rules = f.rules.mapValues(Policy.init(route:)).filter { $0.value != .combine }
+            disabled = f.disabled ?? []
+            order = f.order ?? []
         } catch {
             lastError = "rules.json: \(error.localizedDescription)"
         }
@@ -84,7 +121,7 @@ final class RuleStore {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try enc.encode(File(rules: rules.mapValues(\.route))).write(to: url, options: .atomic)
+            try enc.encode(File(rules: rules.mapValues(\.route), disabled: disabled, order: order)).write(to: url, options: .atomic)
             lastError = nil
         } catch {
             lastError = "Could not save rules: \(error.localizedDescription)"

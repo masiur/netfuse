@@ -23,6 +23,11 @@ install its routing engine; later engine updates ask once more, from the menu.
   carries. A failing link is skipped for 15 seconds and connections retry on the others.
 - **Per-app rules.** Each app can use all connections, only one, or one first with fallback to the
   rest. Helper processes follow their app's rule.
+- **Turn connections off, or put them in order.** Each connection's ⋯ menu turns it off for
+  Netfuse. "Priority order" makes apps without a rule use the first connection while it works,
+  then the next, instead of combining them.
+- **Auto update.** A copy in /Applications checks for a new release at launch and every 6 hours,
+  installs it and relaunches.
 - **Android USB tethering, built in.** Phones that tether over RNDIS (most Samsung, Honor,
   Xiaomi, Oppo and similar) work with no driver, kernel extension or security change, and appear by
   their model name. Phones macOS already supports, such as Pixel 6 and later, work as normal

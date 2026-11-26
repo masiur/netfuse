@@ -35,39 +35,65 @@ const STATUS_PATH: &str = "/var/run/netfuse/status.json";
 
 pub struct State {
     pub sched: Arc<Scheduler>,
-    rules: RwLock<HashMap<String, Route>>,
+    rules: RwLock<Rules>,
+}
+
+/// What rules.json says: per-app routes, and the route for apps without one.
+#[derive(Default)]
+struct Rules {
+    apps: HashMap<String, Route>,
+    default: Route,
+    disabled: Vec<String>,
 }
 
 impl State {
     /// The app behind a flow, "" when it cannot be found. Only looked up when there are rules.
     pub async fn app_for(&self, tcp: bool, port: u16) -> String {
-        if self.rules.read().unwrap().is_empty() {
+        if self.rules.read().unwrap().apps.is_empty() {
             return String::new();
         }
         tokio::task::spawn_blocking(move || owner::app_for_port(tcp, port)).await.ok().flatten().unwrap_or_default()
     }
 
     pub fn route_for(&self, app: &str) -> Route {
-        self.rules.read().unwrap().get(app).cloned().unwrap_or_default()
+        let r = self.rules.read().unwrap();
+        r.apps.get(app).cloned().unwrap_or_else(|| r.default.clone())
     }
 }
 
 #[derive(Deserialize)]
 struct RulesFile {
+    #[serde(default)]
     rules: HashMap<String, String>,
+    /// Adapters switched off in the app: no flow uses them.
+    #[serde(default)]
+    disabled: Vec<String>,
+    /// Priority order: apps without a rule use the first working adapter in it, then the next.
+    /// Empty = combine every adapter.
+    #[serde(default)]
+    order: Vec<String>,
+}
+
+/// "en4 > en0 > *": each adapter in turn, then anything left.
+fn order_route(order: &[String]) -> Route {
+    if order.is_empty() {
+        return Route::new();
+    }
+    order.iter().map(|a| vec![a.clone()]).chain([vec!["*".to_string()]]).collect()
 }
 
 /// Reads rules.json. A missing file is no rules; a route that does not parse is skipped.
-fn load_rules(path: &Path) -> HashMap<String, Route> {
-    let Ok(text) = std::fs::read_to_string(path) else { return HashMap::new() };
+fn load_rules(path: &Path) -> Rules {
+    let Ok(text) = std::fs::read_to_string(path) else { return Rules::default() };
     let file: RulesFile = match serde_json::from_str(&text) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("{}: {e} (no rules applied)", path.display());
-            return HashMap::new();
+            return Rules::default();
         }
     };
-    file.rules
+    let apps = file
+        .rules
         .into_iter()
         .filter_map(|(app, r)| match parse_route(&r) {
             Ok(route) if !route.is_empty() => Some((app, route)),
@@ -77,7 +103,8 @@ fn load_rules(path: &Path) -> HashMap<String, Route> {
                 None
             }
         })
-        .collect()
+        .collect();
+    Rules { apps, default: order_route(&file.order), disabled: file.disabled }
 }
 
 /// The menu-bar app saves rules for the user who runs it; under sudo that is SUDO_USER.
@@ -146,7 +173,9 @@ async fn main() {
         }
         Some("rules") => {
             println!("{}", rules_path.display());
-            let mut rules: Vec<_> = load_rules(&rules_path).into_iter().collect();
+            let loaded = load_rules(&rules_path);
+            println!("default: {}  disabled: {:?}", route_text(&loaded.default), loaded.disabled);
+            let mut rules: Vec<_> = loaded.apps.into_iter().collect();
             rules.sort();
             for (app, r) in rules {
                 println!("  {app:<24} {}", route_text(&r));
@@ -171,7 +200,10 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
     if unsafe { libc::geteuid() } != 0 {
         return Err(std::io::Error::other("needs root: sudo netfuse-engine run"));
     }
-    let st = Arc::new(State { sched: Arc::new(Scheduler::default()), rules: RwLock::new(load_rules(&rules_path)) });
+    let rules = load_rules(&rules_path);
+    let st = Arc::new(State { sched: Arc::new(Scheduler::default()), rules: RwLock::new(Rules::default()) });
+    st.sched.set_disabled(rules.disabled.clone());
+    *st.rules.write().unwrap() = rules;
     let found = adapters::discover();
     if found.is_empty() {
         return Err(std::io::Error::other("no adapter with internet found"));
@@ -180,7 +212,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
         println!("  + {} {}", a.name, a.ip);
     }
     st.sched.update(found);
-    println!("rules: {} ({} apps)", rules_path.display(), st.rules.read().unwrap().len());
+    println!("rules: {} ({} apps)", rules_path.display(), st.rules.read().unwrap().apps.len());
 
     // Scoped defaults first: once the utun's routes are in, bound sockets need them to get out.
     if let Err(e) = scoped::sync() {
@@ -249,8 +281,9 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
                 mtime = m;
                 let rules = load_rules(&rules_path);
                 if tick > 0 {
-                    println!("rules reloaded ({} apps)", rules.len());
+                    println!("rules reloaded ({} apps)", rules.apps.len());
                 }
+                bg.sched.set_disabled(rules.disabled.clone());
                 *bg.rules.write().unwrap() = rules;
             }
             write_status(&status_for_bg, &bg, &tun_name);
@@ -298,3 +331,14 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
     std::process::exit(0); // don't wait for open flows: their routes are gone
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn order_becomes_failover_route() {
+        assert_eq!(route_text(&order_route(&[])), "auto");
+        assert_eq!(route_text(&order_route(&["en4".into(), "en0".into()])), "en4 > en0 > *");
+    }
+}

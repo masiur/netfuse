@@ -100,6 +100,7 @@ struct Inner {
     slots: Vec<Slot>,
     apps: HashMap<(String, String), u32>, // (app, adapter) -> open flows
     turn: usize,                          // rotates the starting point so ties spread out
+    disabled: Vec<String>,                // switched off in the app
 }
 
 #[derive(Default)]
@@ -183,8 +184,10 @@ impl Scheduler {
         let now = Instant::now();
         let (mut pool, mut dead) = (Vec::new(), Vec::new());
         for tier in route {
+            let disabled = &s.disabled;
             let allowed = |sl: &Slot| {
                 sl.present
+                    && !disabled.iter().any(|d| d.eq_ignore_ascii_case(&sl.adapter.name))
                     && !skip.contains(&sl.adapter.name)
                     && tier.iter().any(|t| t == "*" || t.eq_ignore_ascii_case(&sl.adapter.name))
             };
@@ -228,6 +231,11 @@ impl Scheduler {
             sl.last_bytes = now;
             sl.peak = (sl.peak * decay).max(sl.rate.0 + sl.rate.1);
         }
+    }
+
+    /// Adapters no new flow may use, even where a rule names them.
+    pub fn set_disabled(&self, names: Vec<String>) {
+        self.0.lock().unwrap().disabled = names;
     }
 
     /// Records a download test's result (bytes/s).
@@ -312,6 +320,10 @@ mod tests {
         s.fail("en0", Duration::from_secs(60)); // Wi-Fi link broke
         assert_eq!(picks("en0 > *"), set(&["en7"]));
         assert_eq!(picks("en0"), set(&["en0"])); // nothing else allowed: still try it
+
+        s.set_disabled(vec!["en7".into()]); // switched off in the app
+        assert_eq!(picks("auto"), set(&["en0"])); // cooling down, but the only one left
+        assert_eq!(picks("en7"), set(&["none"]));
     }
 
     #[test]
