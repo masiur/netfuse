@@ -16,8 +16,8 @@ cat > "$app/Contents/Info.plist" <<EOF
 	<key>CFBundleName</key><string>Netfuse</string>
 	<key>CFBundleExecutable</key><string>Netfuse</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>${VERSION:-1.2.0}</string>
-	<key>CFBundleVersion</key><string>${VERSION:-1.2.0}</string>
+	<key>CFBundleShortVersionString</key><string>${VERSION:-1.2.5}</string>
+	<key>CFBundleVersion</key><string>${VERSION:-1.2.5}</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSUIElement</key><true/>
 	<key>ATSApplicationFontsPath</key><string>Fonts</string>

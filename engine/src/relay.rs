@@ -49,11 +49,15 @@ pub async fn tcp(mut client: IpStackTcpStream, st: Arc<State>) {
         let _ = cw.shutdown().await;
     };
     tokio::pin!(up, down);
+    let moved = rerouted(&st, &app, host.as_deref(), &route);
+    tokio::pin!(moved);
     // The flow stops counting as busy at the first half-close: a finished request can wait a long
     // time for the other side's FIN, and counting it would steer new flows away from that adapter.
     tokio::select! {
         _ = &mut up => { drop(lease); let _ = tokio::time::timeout(HALF_CLOSE_WAIT, down).await; }
         _ = &mut down => { drop(lease); let _ = tokio::time::timeout(HALF_CLOSE_WAIT, up).await; }
+        // Its rule now says another route: close it, and the app reconnects through that route.
+        _ = &mut moved => {}
     }
 }
 
@@ -70,8 +74,11 @@ pub async fn udp(mut client: IpStackUdpStream, st: Arc<State>) {
     let Some((sock, lease)) = dial(&st, &app, &route, dst, |a| udp_connect(a, dst)).await else { return };
     let meter = &lease.meter;
     let (mut up, mut down) = (vec![0u8; 65535], vec![0u8; 65535]);
+    let moved = rerouted(&st, &app, None, &route);
+    tokio::pin!(moved);
     loop {
         tokio::select! {
+            _ = &mut moved => break,
             r = client.read(&mut up) => match r {
                 Ok(n) if n > 0 => {
                     meter.tx.fetch_add(n as u64, Ordering::Relaxed);
@@ -184,4 +191,15 @@ async fn peek(client: &mut IpStackTcpStream) -> (Vec<u8>, Option<String>) {
         }
     }
     (buf, None)
+}
+
+/// Resolves once a rules reload gives this flow a different route than the one it was dialed on.
+async fn rerouted(st: &State, app: &str, host: Option<&str>, route: &Route) {
+    let mut reloads = st.rules_gen.subscribe();
+    while reloads.changed().await.is_ok() {
+        if st.route_for(app, host) != *route {
+            return;
+        }
+    }
+    std::future::pending().await
 }

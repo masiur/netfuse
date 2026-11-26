@@ -37,6 +37,8 @@ const STATUS_PATH: &str = "/var/run/netfuse/status.json";
 pub struct State {
     pub sched: Arc<Scheduler>,
     rules: RwLock<Rules>,
+    /// Bumped on every rules reload, so open flows can check whether their route changed.
+    pub rules_gen: tokio::sync::watch::Sender<u64>,
 }
 
 /// What rules.json says: per-app routes, and the route for apps without one.
@@ -229,7 +231,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
         return Err(std::io::Error::other("needs root: sudo netfuse-engine run"));
     }
     let rules = load_rules(&rules_path);
-    let st = Arc::new(State { sched: Arc::new(Scheduler::default()), rules: RwLock::new(Rules::default()) });
+    let st = Arc::new(State { sched: Arc::new(Scheduler::default()), rules: RwLock::new(Rules::default()), rules_gen: tokio::sync::watch::Sender::new(0) });
     st.sched.set_disabled(rules.disabled.clone());
     *st.rules.write().unwrap() = rules;
     let found = adapters::discover();
@@ -342,6 +344,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
                 }
                 bg.sched.set_disabled(rules.disabled.clone());
                 *bg.rules.write().unwrap() = rules;
+                bg.rules_gen.send_modify(|g| *g += 1);
             }
             write_status(&status_for_bg, &bg, &tun_name, vpn.as_deref().filter(|_| aside));
             tick += 1;

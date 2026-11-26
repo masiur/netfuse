@@ -23,6 +23,9 @@ install its routing engine; later engine updates ask once more, from the menu.
   carries. A failing link is skipped for 15 seconds and connections retry on the others.
 - **Per-app rules.** Each app can use all connections, only one, or one first with fallback to the
   rest. Helper processes follow their app's rule.
+- **Per-site routing.** Send a site through one connection, for example `youtube.com` (its
+  subdomains included). Site rules win over app rules. Netfuse reads the site name from the TLS
+  or HTTP request, so it works in any app.
 - **VPN per app.** Send one app (say, a browser) through your VPN while everything else uses
   your normal connections. "Only through the VPN" also works as a kill switch for that app. With
   no such rule, Netfuse steps aside while a VPN is connected and resumes after.
