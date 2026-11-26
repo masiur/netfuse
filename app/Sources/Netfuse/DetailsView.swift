@@ -206,6 +206,7 @@ private struct AppRoutesPage: View {
     private var rules = RuleStore.shared
     @State private var extra: [URL] = []
     @State private var apps: [AppEntry] = []
+    @State private var newSite = ""
 
     init(monitor: AdapterMonitor) { self.monitor = monitor }
 
@@ -213,7 +214,7 @@ private struct AppRoutesPage: View {
         VStack(alignment: .leading, spacing: Astryx.space(5)) {
             HStack(alignment: .center) {
                 PageHeader(symbol: "arrow.triangle.branch", title: "App routes",
-                           subtitle: "Choose which connection each app may use, including your VPN. Others combine all.",
+                           subtitle: "Choose which connection each app or site may use, including your VPN. Others combine all.",
                            rx: monitor.totalRx, tx: monitor.totalTx)
             }
             TitledCard("Apps") {
@@ -232,9 +233,29 @@ private struct AppRoutesPage: View {
             }
             HStack {
                 Button("Add app…", action: add).buttonStyle(AstryxButtonStyle())
-                if let err = rules.lastError {
-                    Text(err).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
+            }
+            TitledCard("Sites") {
+                Text("A site's rule wins over the app's: with youtube.com on the VPN, YouTube uses the VPN in every browser. Subdomains included. While any site has a rule, QUIC is turned off so sites can be told apart.")
+                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(Astryx.space(4))
+                ForEach(rules.sites.keys.sorted(), id: \.self) { domain in
+                    Divider().overlay(Astryx.Color.border)
+                    AppRow(app: AppEntry(name: domain, icon: NSImage(systemSymbolName: "globe", accessibilityDescription: nil)),
+                           policy: rules.policy(forSite: domain), adapters: monitor.adapters, live: []) {
+                        rules.setSite($0, for: domain)
+                    }
                 }
+            }
+            HStack {
+                TextField("youtube.com", text: $newSite).textFieldStyle(.roundedBorder).frame(maxWidth: 240)
+                    .onSubmit(addSite)
+                Button("Add site", action: addSite).buttonStyle(AstryxButtonStyle())
+                    .disabled(normalizeDomain(newSite) == nil)
+                Text("YouTube also needs googlevideo.com and ytimg.com.")
+                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+            }
+            if let err = rules.lastError {
+                Text(err).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textError)
             }
         }
         .task {
@@ -243,6 +264,14 @@ private struct AppRoutesPage: View {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
+    }
+
+    /// A new site starts as "VPN first, else the others" (the usual reason to add one); its menu
+    /// changes it, and "All connections" removes it.
+    private func addSite() {
+        guard let d = normalizeDomain(newSite), rules.sites[d] == nil else { newSite = ""; return }
+        rules.setSite(.prefer(vpnID), for: d)
+        newSite = ""
     }
 
     private func reload() { apps = listApps(rules: rules.rules, extra: extra) }

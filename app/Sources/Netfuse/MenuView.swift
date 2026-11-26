@@ -135,19 +135,21 @@ struct MenuView: View {
         let ids = monitor.adapters.map(\.id)
         let ordered = !rules.order.isEmpty
         if monitor.adapters.count > 1 {
-            Picker("Mode", selection: Binding(get: { ordered }, set: { rules.setOrdered($0, ids: rules.sorted(ids)) })) {
-                Text("Combine all").tag(false)
-                Text("Priority order").tag(true)
+            HStack(spacing: Astryx.space(2)) {
+                ModeTile(symbol: "arrow.triangle.merge", title: "Combine", detail: "Shared by speed", selected: !ordered) {
+                    rules.setOrdered(false, ids: ids)
+                }
+                ModeTile(symbol: "list.number", title: "Priority", detail: "Backups take over", selected: ordered) {
+                    rules.setOrdered(true, ids: rules.sorted(ids))
+                }
             }
-            .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             .padding(Astryx.space(2))
-            .help("Priority order: apps without a rule use the first connection while it works, then the next.")
             Divider().overlay(Astryx.Color.border)
         }
         if let rec = recommend(monitor.adapters, engine: engine),
            let best = monitor.adapters.first(where: { $0.id == rec.id }),
            !(ordered && rules.sorted(ids).first == rec.id) {
-            RecommendationRow(name: best.name, reason: rec.reason) {
+            RecommendationRow(name: best.name, reason: rec.reason, action: ordered ? "Make primary" : "Use first") {
                 rules.setOrdered(true, ids: [rec.id] + ids.filter { $0 != rec.id })
             }
             Divider().overlay(Astryx.Color.border)
@@ -158,7 +160,8 @@ struct MenuView: View {
             let off = rules.isDisabled(a.id)
             HStack(spacing: 0) {
                 AdapterRow(adapter: a, link: engine?.link(a.id), note: off ? "Turned off in Netfuse" : nil,
-                           rank: ordered ? i + 1 : nil)
+                           rank: ordered ? i + 1 : nil,
+                           share: ordered || off || list.count < 2 ? nil : engine?.share(a.id))
                     .opacity(off ? 0.5 : 1)
                     .contentShape(Rectangle())
                     .onTapGesture { showDetails(a.id) }
@@ -244,6 +247,7 @@ struct AdapterRow: View {
     var link: EngineStatus.Link? // nil while the engine is off or not using this adapter
     var note: String? // in place of the address line
     var rank: Int? // place in the priority order
+    var share: Double? // part of new connections it gets while combining (0...1)
 
     /// An Android phone's adapter has no router macOS knows of: the engine drives it, and lists it.
     private var online: Bool { adapter.hasRouter || link != nil }
@@ -255,16 +259,33 @@ struct AdapterRow: View {
                 .foregroundStyle(online ? Astryx.Color.textPrimary : Astryx.Color.textDisabled)
                 .frame(width: 36, height: 36)
                 .background(Astryx.Color.muted, in: RoundedRectangle(cornerRadius: Astryx.Radius.inner))
-            VStack(alignment: .leading, spacing: 0) {
+                .overlay(alignment: .topLeading) {
+                    if let rank { // priority: the place, on the icon's corner
+                        Text("\(rank)").font(.system(size: 10, weight: .bold)).monospacedDigit()
+                            .foregroundStyle(rank == 1 ? Astryx.Color.onAccent : Astryx.Color.textPrimary)
+                            .frame(width: 16, height: 16)
+                            .background(rank == 1 ? Astryx.Color.success : Astryx.Color.neutralChip, in: Circle())
+                            .offset(x: -5, y: -5)
+                    }
+                }
+            VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: Astryx.space(1.5)) {
                     Text(adapter.name).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
-                    Text(adapter.id).font(Astryx.Font.code).foregroundStyle(Astryx.Color.textSecondary)
-                    if let rank { Badge(text: "#\(rank)", tone: rank == 1 ? .success : .neutral) }
+                        .lineLimit(1).truncationMode(.middle).help("\(adapter.name) (\(adapter.id))")
+                    if let rank { Badge(text: rank == 1 ? "Primary" : "Backup", tone: rank == 1 ? .success : .neutral) }
                 }
                 Text(detail).lineLimit(1)
                     .font(Astryx.Font.supporting)
                     .foregroundStyle(link?.coolingDown == true ? Astryx.Color.textWarning : Astryx.Color.textSecondary)
-                if note == nil, !specs.isEmpty {
+                if let share, note == nil { // combine: how new connections are split
+                    HStack(spacing: Astryx.space(1.5)) {
+                        ProgressView(value: share).progressViewStyle(.linear).tint(Astryx.Color.success)
+                            .frame(width: 90).controlSize(.mini)
+                        Text("\(Int((share * 100).rounded()))% of traffic")
+                            .font(Astryx.Font.supporting).monospacedDigit().foregroundStyle(Astryx.Color.textSecondary)
+                    }
+                    .help("Share of new connections, by measured speed\(specs.isEmpty ? "" : " (\(specs))")")
+                } else if note == nil, !specs.isEmpty {
                     Text(specs).lineLimit(1)
                         .font(Astryx.Font.supporting).monospacedDigit()
                         .foregroundStyle(Astryx.Color.textSecondary)
@@ -289,9 +310,8 @@ struct AdapterRow: View {
     /// Gateway, the driver's link rate, and what the engine measured it can carry.
     private var specs: String {
         var parts: [String] = []
-        if let r = adapter.router { parts.append("via \(r)") }
-        if adapter.linkSpeed > 0 { parts.append("link " + speedText(Double(adapter.linkSpeed) / 8)) }
-        if let c = link?.capacity, c > 0 { parts.append("capacity ~" + speedText(c)) }
+        if let c = link?.capacity, c > 0 { parts.append("~" + speedText(c) + " measured") }
+        else if adapter.linkSpeed > 0 { parts.append("link " + speedText(Double(adapter.linkSpeed) / 8)) }
         return parts.joined(separator: " · ")
     }
 
@@ -301,7 +321,7 @@ struct AdapterRow: View {
         let ip = adapter.ipv4 ?? "IPv6 only"
         guard let link else { return ip }
         if link.coolingDown { return "\(ip) · link failed, retrying soon" }
-        return "\(ip) · \(link.active) open"
+        return "\(ip) · \(link.active) conn."
     }
 }
 
@@ -403,6 +423,7 @@ private struct IPhoneHint: View {
 struct RecommendationRow: View {
     var name: String
     var reason: String
+    var action = "Use first"
     var apply: () -> Void
 
     var body: some View {
@@ -414,7 +435,7 @@ struct RecommendationRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: Astryx.space(2))
-            Button("Use first", action: apply).buttonStyle(AstryxButtonStyle(primary: true))
+            Button(action, action: apply).buttonStyle(AstryxButtonStyle(primary: true))
                 .help("Priority order with \(name) first: apps without a rule use it while it works, then the others.")
         }
         .padding(Astryx.space(3))
@@ -423,3 +444,34 @@ struct RecommendationRow: View {
 
 /// What rules call the connected VPN, whichever tunnel it is on (the engine resolves it).
 let vpnID = "vpn"
+
+/// One of the two ways to use the connections, as a selectable tile.
+struct ModeTile: View {
+    var symbol: String
+    var title: String
+    var detail: String
+    var selected: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Astryx.space(2)) {
+                Image(systemName: symbol).font(.system(size: 14, weight: .semibold)).frame(width: 18)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).font(Astryx.Font.label)
+                    Text(detail).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
+                }
+                Spacer(minLength: 0)
+                if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(Astryx.Color.success) }
+            }
+            .foregroundStyle(Astryx.Color.textPrimary)
+            .padding(.horizontal, Astryx.space(2.5)).padding(.vertical, Astryx.space(2))
+            .background(selected ? Astryx.Color.successMuted.opacity(0.5) : Astryx.Color.muted,
+                        in: RoundedRectangle(cornerRadius: Astryx.Radius.element))
+            .overlay(RoundedRectangle(cornerRadius: Astryx.Radius.element)
+                .strokeBorder(selected ? Astryx.Color.success : .clear, lineWidth: 1.5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}

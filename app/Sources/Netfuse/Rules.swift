@@ -42,6 +42,8 @@ enum Policy: Hashable, Sendable {
 @MainActor @Observable
 final class RuleStore {
     private(set) var rules: [String: Policy] = [:]
+    /// Per-site routes by domain ("youtube.com" covers its subdomains); they win over app rules.
+    private(set) var sites: [String: Policy] = [:]
     /// Adapters (BSD names) switched off: the engine sends nothing through them.
     private(set) var disabled: [String] = []
     /// Priority order: apps without a rule use the first working adapter, then the next.
@@ -65,10 +67,20 @@ final class RuleStore {
     }
 
     func policy(for app: String) -> Policy { rules[app] ?? .combine }
+    func policy(forSite domain: String) -> Policy { sites[domain] ?? .combine }
 
     func set(_ policy: Policy, for app: String) {
         if case .combine = policy { rules[app] = nil } else { rules[app] = policy }
         save()
+    }
+
+    /// Sets a site's route; `.combine` removes it. Returns false for an empty domain.
+    @discardableResult
+    func setSite(_ policy: Policy, for domain: String) -> Bool {
+        guard let d = normalizeDomain(domain) else { return false }
+        if case .combine = policy { sites[d] = nil } else { sites[d] = policy }
+        save()
+        return true
     }
 
     func isDisabled(_ id: String) -> Bool { disabled.contains(id) }
@@ -107,12 +119,13 @@ final class RuleStore {
     private struct File: Codable {
         var version = 1
         var rules: [String: String]
+        var sites: [String: String]?
         var disabled: [String]?
         var order: [String]?
         var keepWithVpn: Bool?
 
         enum CodingKeys: String, CodingKey {
-            case version, rules, disabled, order
+            case version, rules, sites, disabled, order
             case keepWithVpn = "keep_with_vpn"
         }
     }
@@ -122,6 +135,7 @@ final class RuleStore {
         do {
             let f = try JSONDecoder().decode(File.self, from: data)
             rules = f.rules.mapValues(Policy.init(route:)).filter { $0.value != .combine }
+            sites = (f.sites ?? [:]).mapValues(Policy.init(route:)).filter { $0.value != .combine }
             disabled = f.disabled ?? []
             order = f.order ?? []
             keepWithVPN = f.keepWithVpn ?? false
@@ -135,7 +149,7 @@ final class RuleStore {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             let enc = JSONEncoder()
             enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try enc.encode(File(rules: rules.mapValues(\.route), disabled: disabled, order: order, keepWithVpn: keepWithVPN ? true : nil)).write(to: url, options: .atomic)
+            try enc.encode(File(rules: rules.mapValues(\.route), sites: sites.isEmpty ? nil : sites.mapValues(\.route), disabled: disabled, order: order, keepWithVpn: keepWithVPN ? true : nil)).write(to: url, options: .atomic)
             lastError = nil
         } catch {
             lastError = "Could not save rules: \(error.localizedDescription)"
@@ -189,4 +203,15 @@ extension Policy {
         case .custom(let r): r
         }
     }
+}
+
+/// "https://www.YouTube.com/watch" -> "www.youtube.com", "*.x.com" -> "x.com"; nil if empty.
+/// Same as the engine's sites::normalize.
+func normalizeDomain(_ s: String) -> String? {
+    var d = s.trimmingCharacters(in: .whitespaces).lowercased()
+    if let r = d.range(of: "://") { d = String(d[r.upperBound...]) }
+    d = String(d.prefix { !"/:?".contains($0) })
+    if d.hasPrefix("*.") { d.removeFirst(2) }
+    d = d.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+    return d.isEmpty ? nil : d
 }
