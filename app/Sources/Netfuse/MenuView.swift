@@ -135,23 +135,32 @@ struct MenuView: View {
         let ids = monitor.adapters.map(\.id)
         let ordered = !rules.order.isEmpty
         if monitor.adapters.count > 1 {
-            HStack(spacing: Astryx.space(2)) {
-                ModeTile(symbol: "arrow.triangle.merge", title: "Combine", detail: "Shared by speed", selected: !ordered) {
-                    rules.setOrdered(false, ids: ids)
+            VStack(alignment: .leading, spacing: Astryx.space(1.5)) {
+                Picker("Mode", selection: Binding(get: { ordered }, set: { rules.setOrdered($0, ids: rules.sorted(ids)) })) {
+                    Text("Combine").tag(false)
+                    Text("Priority").tag(true)
                 }
-                ModeTile(symbol: "list.number", title: "Priority", detail: "Backups take over", selected: ordered) {
-                    rules.setOrdered(true, ids: rules.sorted(ids))
-                }
+                .pickerStyle(.segmented).labelsHidden()
+                Text(ordered ? "Uses the first connection; the others take over if it fails."
+                             : "Spreads traffic over every connection by speed.")
+                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
             }
-            .padding(Astryx.space(2))
+            .padding(Astryx.space(3))
             Divider().overlay(Astryx.Color.border)
         }
         if let rec = recommend(monitor.adapters, engine: engine),
            let best = monitor.adapters.first(where: { $0.id == rec.id }),
            !(ordered && rules.sorted(ids).first == rec.id) {
-            RecommendationRow(name: best.name, reason: rec.reason, action: ordered ? "Make primary" : "Use first") {
-                rules.setOrdered(true, ids: [rec.id] + ids.filter { $0 != rec.id })
+            HStack(spacing: Astryx.space(1.5)) {
+                Text("\(best.name) is the faster connection.").lineLimit(1)
+                    .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary).help(rec.reason)
+                Spacer(minLength: 0)
+                Button(ordered ? "Make it first" : "Use it first") {
+                    rules.setOrdered(true, ids: [rec.id] + ids.filter { $0 != rec.id })
+                }
+                .buttonStyle(.link).font(Astryx.Font.supporting)
             }
+            .padding(.horizontal, Astryx.space(3)).padding(.vertical, Astryx.space(2))
             Divider().overlay(Astryx.Color.border)
         }
         let list = ordered ? rules.sorted(ids).compactMap { id in monitor.adapters.first { $0.id == id } } : monitor.adapters
@@ -255,73 +264,43 @@ struct AdapterRow: View {
     var body: some View {
         HStack(spacing: Astryx.space(3)) {
             Image(systemName: adapter.symbol)
-                .font(.system(size: 18, weight: .medium))
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(online ? Astryx.Color.textPrimary : Astryx.Color.textDisabled)
-                .frame(width: 36, height: 36)
+                .frame(width: 32, height: 32)
                 .background(Astryx.Color.muted, in: RoundedRectangle(cornerRadius: Astryx.Radius.inner))
-                .overlay(alignment: .topLeading) {
-                    if let rank { // priority: the place, on the icon's corner
-                        Text("\(rank)").font(.system(size: 10, weight: .bold)).monospacedDigit()
-                            .foregroundStyle(rank == 1 ? Astryx.Color.onAccent : Astryx.Color.textPrimary)
-                            .frame(width: 16, height: 16)
-                            .background(rank == 1 ? Astryx.Color.success : Astryx.Color.neutralChip, in: Circle())
-                            .offset(x: -5, y: -5)
-                    }
-                }
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: Astryx.space(1.5)) {
-                    Text(adapter.name).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
-                        .lineLimit(1).truncationMode(.middle).help("\(adapter.name) (\(adapter.id))")
-                    if let rank { Badge(text: rank == 1 ? "Primary" : "Backup", tone: rank == 1 ? .success : .neutral) }
-                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(adapter.name).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
+                    .lineLimit(1).help("\(adapter.name) (\(adapter.id))")
                 Text(detail).lineLimit(1)
                     .font(Astryx.Font.supporting)
                     .foregroundStyle(link?.coolingDown == true ? Astryx.Color.textWarning : Astryx.Color.textSecondary)
-                if let share, note == nil { // combine: how new connections are split
-                    HStack(spacing: Astryx.space(1.5)) {
-                        ProgressView(value: share).progressViewStyle(.linear).tint(Astryx.Color.success)
-                            .frame(width: 90).controlSize(.mini)
-                        Text("\(Int((share * 100).rounded()))% of traffic")
-                            .font(Astryx.Font.supporting).monospacedDigit().foregroundStyle(Astryx.Color.textSecondary)
-                    }
-                    .help("Share of new connections, by measured speed\(specs.isEmpty ? "" : " (\(specs))")")
-                } else if note == nil, !specs.isEmpty {
-                    Text(specs).lineLimit(1)
-                        .font(Astryx.Font.supporting).monospacedDigit()
-                        .foregroundStyle(Astryx.Color.textSecondary)
+            }
+            Spacer(minLength: Astryx.space(2))
+            if note == nil {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(speedText(adapter.rxBytesPerSec)).font(Astryx.Font.label).foregroundStyle(Astryx.Color.textPrimary)
+                    Text(trailing).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
                 }
+                .monospacedDigit()
+                .help("Download now · upload \(speedText(adapter.txBytesPerSec))")
             }
-            Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 0) {
-                Text("↓ " + speedText(adapter.rxBytesPerSec))
-                Text("↑ " + speedText(adapter.txBytesPerSec))
-            }
-            .font(Astryx.Font.supporting).monospacedDigit()
-            .foregroundStyle(Astryx.Color.textSecondary)
-            .opacity(note == nil ? 1 : 0) // no traffic to show; kept for the row's height
-            Circle().fill(!online ? Astryx.Color.textDisabled
-                          : link?.coolingDown == true ? Astryx.Color.textWarning : Astryx.Color.success)
-                .frame(width: 8, height: 8)
         }
         .padding(.horizontal, Astryx.space(3))
-        .padding(.vertical, Astryx.space(3.5))
+        .padding(.vertical, Astryx.space(2.5))
     }
 
-    /// Gateway, the driver's link rate, and what the engine measured it can carry.
-    private var specs: String {
-        var parts: [String] = []
-        if let c = link?.capacity, c > 0 { parts.append("~" + speedText(c) + " measured") }
-        else if adapter.linkSpeed > 0 { parts.append("link " + speedText(Double(adapter.linkSpeed) / 8)) }
-        return parts.joined(separator: " · ")
+    /// Under the speed: the mode's one fact about this connection.
+    private var trailing: String {
+        if let rank { return rank == 1 ? "Primary" : "Backup \(rank - 1)" }
+        if let share { return "\(Int((share * 100).rounded()))% of traffic" }
+        return "↑ " + speedText(adapter.txBytesPerSec)
     }
 
     private var detail: String {
         if let note { return note }
         guard online else { return "No internet" }
-        let ip = adapter.ipv4 ?? "IPv6 only"
-        guard let link else { return ip }
-        if link.coolingDown { return "\(ip) · link failed, retrying soon" }
-        return "\(ip) · \(link.active) conn."
+        if link?.coolingDown == true { return "Link failed, retrying soon" }
+        return adapter.ipv4 ?? "IPv6 only"
     }
 }
 
@@ -444,34 +423,3 @@ struct RecommendationRow: View {
 
 /// What rules call the connected VPN, whichever tunnel it is on (the engine resolves it).
 let vpnID = "vpn"
-
-/// One of the two ways to use the connections, as a selectable tile.
-struct ModeTile: View {
-    var symbol: String
-    var title: String
-    var detail: String
-    var selected: Bool
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: Astryx.space(2)) {
-                Image(systemName: symbol).font(.system(size: 14, weight: .semibold)).frame(width: 18)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(title).font(Astryx.Font.label)
-                    Text(detail).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
-                }
-                Spacer(minLength: 0)
-                if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(Astryx.Color.success) }
-            }
-            .foregroundStyle(Astryx.Color.textPrimary)
-            .padding(.horizontal, Astryx.space(2.5)).padding(.vertical, Astryx.space(2))
-            .background(selected ? Astryx.Color.successMuted.opacity(0.5) : Astryx.Color.muted,
-                        in: RoundedRectangle(cornerRadius: Astryx.Radius.element))
-            .overlay(RoundedRectangle(cornerRadius: Astryx.Radius.element)
-                .strokeBorder(selected ? Astryx.Color.success : .clear, lineWidth: 1.5))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-}
