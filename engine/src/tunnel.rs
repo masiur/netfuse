@@ -73,6 +73,51 @@ pub fn vpn(ours: &str) -> Option<String> {
     primary_vpn(&out, ours)
 }
 
+/// The servers connected VPNs talk to ("RemoteAddress" of each connected VPN service). Their
+/// encrypted traffic must not be captured: relayed by the engine it breaks the tunnel.
+pub fn vpn_servers() -> Vec<std::net::Ipv4Addr> {
+    let scutil = |args: &[&str]| {
+        Command::new("/usr/sbin/scutil").args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+    };
+    connected_services(&scutil(&["--nc", "list"]))
+        .iter()
+        .filter_map(|id| remote_address(&scutil(&["--nc", "show", id])))
+        .flat_map(|host| {
+            use std::net::ToSocketAddrs;
+            (host.as_str(), 0).to_socket_addrs().into_iter().flatten()
+        })
+        .filter_map(|a| match a.ip() { std::net::IpAddr::V4(ip) => Some(ip), _ => None })
+        .collect()
+}
+
+fn connected_services(list: &str) -> Vec<String> {
+    list.lines()
+        .filter(|l| l.contains("(Connected)"))
+        .filter_map(|l| l.split_whitespace().nth(2).map(str::to_string))
+        .collect()
+}
+
+/// "RemoteAddress : 108.62.161.57:51820" -> "108.62.161.57"; a host name stays a name.
+fn remote_address(show: &str) -> Option<String> {
+    let v = show.lines().find_map(|l| l.trim().strip_prefix("RemoteAddress : "))?.trim();
+    let host = match v.rsplit_once(':') {
+        Some((h, port)) if port.bytes().all(|b| b.is_ascii_digit()) && !h.contains(':') => h,
+        _ => v,
+    };
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+#[test]
+fn reads_vpn_servers() {
+    let list = "Available network connection services in the current set (*=enabled):\n\
+        * (Connected)      47D086A9-1306 VPN (com.wireguard.macos) \"us\"   [VPN:com.wireguard.macos]\n\
+        * (Disconnected)   0E7654FE-1666 VPN (ch.protonvpn.mac) \"ProtonVPN\" [VPN:ch.protonvpn.mac]\n";
+    assert_eq!(connected_services(list), ["47D086A9-1306"]);
+    assert_eq!(remote_address("  RemoteAddress : 108.62.161.57:51820\n").as_deref(), Some("108.62.161.57"));
+    assert_eq!(remote_address("RemoteAddress : nl.example.net").as_deref(), Some("nl.example.net"));
+    assert_eq!(remote_address("Other : x"), None);
+}
+
 fn primary_vpn(scutil: &str, ours: &str) -> Option<String> {
     let iface = scutil.lines().find_map(|l| l.trim().strip_prefix("PrimaryInterface : "))?.trim();
     let tunnel = ["utun", "ipsec", "ppp", "tun", "tap"].iter().any(|p| iface.starts_with(p));

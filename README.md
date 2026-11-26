@@ -23,6 +23,13 @@ install its routing engine; later engine updates ask once more, from the menu.
   carries. A failing link is skipped for 15 seconds and connections retry on the others.
 - **Per-app rules.** Each app can use all connections, only one, or one first with fallback to the
   rest. Helper processes follow their app's rule.
+- **VPN per app.** Send one app (say, a browser) through your VPN while everything else uses
+  your normal connections. "Only through the VPN" also works as a kill switch for that app. With
+  no such rule, Netfuse steps aside while a VPN is connected and resumes after.
+- **Best connection.** Netfuse recommends the faster, steadier link from what it measured, and
+  puts it first with one click.
+- **Settings.** Open at login, alerts when a connection drops, DNS flush, renew address, and
+  removing the engine.
 - **Turn connections off, or put them in order.** Each connection's ⋯ menu turns it off for
   Netfuse. "Priority order" makes apps without a rule use the first connection while it works,
   then the next, instead of combining them.

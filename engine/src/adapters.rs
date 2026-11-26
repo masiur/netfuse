@@ -32,6 +32,17 @@ pub fn discover() -> Vec<Adapter> {
     out
 }
 
+/// The connected VPN's tunnel as an adapter named "vpn", the name rules use for it, so a rule
+/// keeps working when the VPN comes back on another utun.
+pub fn vpn_adapter(utun: &str) -> Option<Adapter> {
+    ipv4_addresses()
+        .into_iter()
+        .find(|(name, _, _)| name == utun)
+        .map(|(_, index, ip)| Adapter { name: VPN.into(), index, ip })
+}
+
+pub const VPN: &str = "vpn";
+
 pub fn is_hardware(name: &str) -> bool {
     let digits = name.strip_prefix("feth").or_else(|| name.strip_prefix("en"));
     digits.is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))

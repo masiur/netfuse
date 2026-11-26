@@ -339,6 +339,12 @@ struct AppRow: View {
                 Section("Prefer, fall back to the others") {
                     ForEach(adapters) { a in Button(a.name) { onChange(.prefer(a.id)) } }
                 }
+                // The VPN is only reachable once its app connects; "Only VPN" then works as a kill
+                // switch: no internet for this app while the VPN is down.
+                Section("VPN") {
+                    Button("Only through the VPN") { onChange(.only(vpnID)) }
+                    Button("VPN first, else the others") { onChange(.prefer(vpnID)) }
+                }
             } label: {
                 HStack(spacing: Astryx.space(1)) {
                     Text(label).font(Astryx.Font.supporting.weight(.medium))
@@ -358,7 +364,7 @@ struct AppRow: View {
 
     private var isDefault: Bool { policy == .combine }
 
-    private func name(_ id: String) -> String { adapters.first { $0.id == id }?.name ?? id }
+    private func name(_ id: String) -> String { adapters.first { $0.id == id }?.name ?? (id == vpnID ? "VPN" : id) }
 
     private var label: String { policy.text(name) }
 }
@@ -414,3 +420,6 @@ struct RecommendationRow: View {
         .padding(Astryx.space(3))
     }
 }
+
+/// What rules call the connected VPN, whichever tunnel it is on (the engine resolves it).
+let vpnID = "vpn"

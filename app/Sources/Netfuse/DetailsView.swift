@@ -116,9 +116,10 @@ private struct SettingsPage: View {
                         Text("Keep combining").tag(true)
                     }
                     .pickerStyle(.radioGroup)
-                    Text(rules.keepWithVPN
+                    Text((rules.keepWithVPN
                          ? "Traffic is combined across your connections and does not go through the VPN."
                          : "All traffic goes through the VPN. Netfuse resumes when it disconnects. Recommended.")
+                         + " Apps you send through the VPN in App routes keep Netfuse running beside it.")
                         .font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)
                 }
                 .padding(Astryx.space(4))
@@ -208,7 +209,7 @@ private struct AppRoutesPage: View {
         VStack(alignment: .leading, spacing: Astryx.space(5)) {
             HStack(alignment: .center) {
                 PageHeader(symbol: "arrow.triangle.branch", title: "App routes",
-                           subtitle: "Choose which connection each app may use. Apps not listed combine all.",
+                           subtitle: "Choose which connection each app may use, including your VPN. Others combine all.",
                            rx: monitor.totalRx, tx: monitor.totalTx)
             }
             TitledCard("Apps") {
@@ -379,7 +380,7 @@ private struct AppsTable: View {
     }
 
     private func total(_ f: [EngineStatus.Flows]) -> Int { f.reduce(0) { $0 + $1.flows } }
-    private func name(_ id: String) -> String { monitor.adapters.first { $0.id == id }?.name ?? id }
+    private func name(_ id: String) -> String { monitor.adapters.first { $0.id == id }?.name ?? (id == vpnID ? "VPN" : id) }
 
     private func note(_ s: String) -> some View {
         Text(s).font(Astryx.Font.supporting).foregroundStyle(Astryx.Color.textSecondary)

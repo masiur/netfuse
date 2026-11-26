@@ -189,7 +189,9 @@ impl Scheduler {
                 sl.present
                     && !disabled.iter().any(|d| d.eq_ignore_ascii_case(&sl.adapter.name))
                     && !skip.contains(&sl.adapter.name)
-                    && tier.iter().any(|t| t == "*" || t.eq_ignore_ascii_case(&sl.adapter.name))
+                    // "*" is every real connection; the VPN is used only where a rule names it.
+                    && tier.iter().any(|t| (t == "*" && sl.adapter.name != crate::adapters::VPN)
+                        || t.eq_ignore_ascii_case(&sl.adapter.name))
             };
             let (up, down): (Vec<usize>, Vec<usize>) = (0..s.slots.len())
                 .filter(|&i| allowed(&s.slots[i]))
@@ -288,6 +290,20 @@ mod tests {
 
     fn ad(name: &str, last: u8) -> Adapter {
         Adapter { name: name.into(), index: 1, ip: [10, 0, 0, last].into() }
+    }
+
+    #[test]
+    fn vpn_only_where_a_rule_names_it() {
+        let s = Arc::new(Scheduler::default());
+        s.update(vec![ad("en0", 1), ad("vpn", 2)]);
+        for _ in 0..4 {
+            assert_eq!(s.acquire(&Route::new(), &[], "a").unwrap().adapter.name, "en0");
+        }
+        let vpn = parse_route("vpn").unwrap();
+        assert_eq!(s.acquire(&vpn, &[], "b").unwrap().adapter.name, "vpn");
+        s.update(vec![ad("en0", 1)]); // VPN disconnected: an "only VPN" app gets nothing
+        assert!(s.acquire(&vpn, &[], "b").is_none());
+        assert_eq!(s.acquire(&parse_route("vpn > *").unwrap(), &[], "c").unwrap().adapter.name, "en0");
     }
 
     #[test]

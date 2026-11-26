@@ -95,10 +95,51 @@ pub fn sync() -> Result<(), String> {
     first_err.map_or(Ok(()), Err)
 }
 
+/// A scoped default on a VPN's tunnel, so sockets bound to it (apps routed to "vpn") get out.
+/// VPNs only install an unscoped default. It goes away with the tunnel.
+pub fn tunnel_default(netif: &str) {
+    let _ = Command::new("/sbin/route")
+        .args(["-q", "-n", "add", "-inet", "default", "-interface", netif, "-ifscope", netif])
+        .output();
+}
+
+/// Host routes sending VPN servers straight out a real adapter, past the engine: server -> gateway.
+static BYPASS: Mutex<Option<HashMap<std::net::Ipv4Addr, String>>> = Mutex::new(None);
+
+/// Keeps one host route per VPN server via the first hardware adapter's gateway, so the VPN's own
+/// encrypted traffic is never captured. An empty list removes them.
+pub fn bypass(servers: &[std::net::Ipv4Addr]) {
+    if servers.is_empty() && BYPASS.lock().unwrap().as_ref().is_none_or(HashMap::is_empty) {
+        return; // the usual case, every second: no VPN, nothing to do
+    }
+    let gw = default_routes().unwrap_or_default().into_iter()
+        .find(|r| is_hardware(&r.netif) && !r.scoped && r.gateway.is_some())
+        .or_else(|| default_routes().unwrap_or_default().into_iter().find(|r| is_hardware(&r.netif) && r.gateway.is_some()))
+        .and_then(|r| r.gateway);
+    let mut guard = BYPASS.lock().unwrap();
+    let have = guard.get_or_insert_with(HashMap::new);
+    let host = |verb: &str, ip: &std::net::Ipv4Addr, gw: &str| {
+        let _ = Command::new("/sbin/route").args(["-q", "-n", verb, "-host", &ip.to_string(), gw]).output();
+    };
+    have.retain(|ip, old| {
+        let keep = servers.contains(ip) && gw.as_deref() == Some(old.as_str());
+        if !keep { host("delete", ip, old); }
+        keep
+    });
+    if let Some(gw) = gw {
+        let new: Vec<_> = servers.iter().filter(|ip| !have.contains_key(ip)).copied().collect();
+        for ip in &new {
+            host("add", ip, &gw);
+            have.insert(*ip, gw.clone());
+        }
+    }
+}
+
 /// Removes the scoped defaults we added where the adapter is still primary (elsewhere macOS
 /// relies on them). ponytail: a crash leaves them behind; harmless duplicates of the primary
 /// default, cleaned at the next stop.
 pub fn restore() {
+    bypass(&[]);
     let primary: HashSet<String> = default_routes()
         .unwrap_or_default()
         .into_iter()

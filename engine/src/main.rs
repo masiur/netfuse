@@ -48,6 +48,13 @@ struct Rules {
     keep_with_vpn: bool,
 }
 
+impl Rules {
+    /// Some app's route names the VPN.
+    fn uses_vpn(&self) -> bool {
+        self.apps.values().flatten().flatten().any(|a| a.eq_ignore_ascii_case(adapters::VPN))
+    }
+}
+
 impl State {
     /// The app behind a flow, "" when it cannot be found. Only looked up when there are rules.
     pub async fn app_for(&self, tcp: bool, port: u16) -> String {
@@ -251,33 +258,44 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
         let mut tick = 0u64;
         let mut tested = std::collections::HashSet::new(); // speedtest keys done this run
         let mut last = std::time::Instant::now();
-        let mut vpn: Option<String> = None; // stepped aside for this VPN's tunnel
+        let mut aside = false; // our routes are out, leaving all traffic to the VPN
         loop {
-            let now_vpn = if bg.rules.read().unwrap().keep_with_vpn { None } else { tunnel::vpn(&tun_name) };
-            if now_vpn != vpn {
-                match &now_vpn {
-                    Some(v) => {
-                        println!("VPN on {v}: stepping aside");
-                        tunnel::close_routes(&tun_name);
-                        vpn = now_vpn;
-                    }
-                    None => match tunnel::add_routes(&tun_name) {
-                        Ok(()) => {
-                            println!("VPN off: capturing again");
-                            vpn = None;
-                        }
-                        Err(e) => eprintln!("warning: routes: {e}"), // tried again next second
-                    },
-                }
-            }
             bg.sched.tick(last.elapsed().as_secs_f64().max(0.001));
             last = std::time::Instant::now();
+            let vpn = tunnel::vpn(&tun_name); // the connected VPN's tunnel
+            // Step aside for a VPN unless something wants to keep going: a rule that sends apps
+            // through it, or the setting to keep combining beside it.
+            let keep = { let r = bg.rules.read().unwrap(); r.keep_with_vpn || r.uses_vpn() };
+            let step_aside = vpn.is_some() && !keep;
+            if step_aside != aside {
+                if step_aside {
+                    println!("VPN on {}: stepping aside", vpn.as_deref().unwrap_or("?"));
+                    tunnel::close_routes(&tun_name);
+                    aside = true;
+                } else {
+                    match tunnel::add_routes(&tun_name) {
+                        Ok(()) => {
+                            println!("capturing again{}", if vpn.is_some() { " (VPN used by rules)" } else { "" });
+                            aside = false;
+                        }
+                        Err(e) => eprintln!("warning: routes: {e}"), // tried again next second
+                    }
+                }
+            }
+            // While capturing beside a VPN, its server is reached directly, never through us.
+            scoped::bypass(&if vpn.is_some() && !aside { tunnel::vpn_servers() } else { Vec::new() });
             if on_flag.as_ref().is_some_and(|f| !f.exists()) {
                 off.notify_one();
                 return;
             }
             if tick % 3 == 0 {
-                let found = adapters::discover();
+                let mut found = adapters::discover();
+                if let (Some(v), false) = (&vpn, aside) {
+                    if let Some(a) = adapters::vpn_adapter(v) {
+                        scoped::tunnel_default(v);
+                        found.push(a);
+                    }
+                }
                 bg.sched.update(found.clone());
                 for a in found {
                     let key = speedtest::key(&a);
@@ -310,7 +328,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
                 bg.sched.set_disabled(rules.disabled.clone());
                 *bg.rules.write().unwrap() = rules;
             }
-            write_status(&status_for_bg, &bg, &tun_name, vpn.as_deref());
+            write_status(&status_for_bg, &bg, &tun_name, vpn.as_deref().filter(|_| aside));
             tick += 1;
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
