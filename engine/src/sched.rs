@@ -62,6 +62,8 @@ pub struct Meter {
 struct Slot {
     adapter: Adapter,
     present: bool,
+    share_credit: f64,
+    disconnect: tokio::sync::watch::Sender<()>,
     active: u32,
     total: u64,
     failed: u64,
@@ -78,6 +80,8 @@ impl Slot {
         Slot {
             adapter,
             present: true,
+            share_credit: 0.0,
+            disconnect: tokio::sync::watch::channel(()).0,
             active: 0,
             total: 0,
             failed: 0,
@@ -110,6 +114,7 @@ pub struct Scheduler(Mutex<Inner>);
 pub struct Lease {
     pub adapter: Adapter,
     pub meter: Arc<Meter>,
+    pub disconnect: tokio::sync::watch::Receiver<()>,
     app: String,
     sched: Arc<Scheduler>,
 }
@@ -166,16 +171,22 @@ impl Scheduler {
             match s.slots.iter_mut().find(|sl| sl.adapter.name == a.name) {
                 Some(sl) => {
                     sl.present = true;
+                    if sl.adapter != a {
+                        sl.disconnect.send_replace(());
+                    }
                     sl.adapter = a;
                 }
                 None => s.slots.push(Slot::new(a)),
             }
         }
+        for sl in &s.slots {
+            if !sl.present { sl.disconnect.send_replace(()); }
+        }
         s.slots.retain(|sl| sl.present || sl.active > 0);
     }
 
-    /// Picks an adapter for a new flow of `app`: the first route tier with a working adapter, the
-    /// least busy adapter in it. Adapters in `skip` (already failed for this flow) are left out.
+    /// Picks an adapter for a new flow of `app`: the first route tier with a working adapter,
+    /// weighted by estimated capacity. Adapters in `skip` (already failed for this flow) are left out.
     /// When every allowed adapter is cooling down the flow still gets one rather than none.
     pub fn acquire(self: &Arc<Self>, route: &Route, skip: &[String], app: &str) -> Option<Lease> {
         let every = vec![vec!["*".to_string()]];
@@ -212,16 +223,22 @@ impl Scheduler {
         }
         s.turn = s.turn.wrapping_add(1);
         let start = s.turn % pool.len();
-        let load = |i: usize| f64::from(s.slots[i].active + 1) / s.slots[i].capacity();
-        let i = (0..pool.len())
-            .map(|k| pool[(start + k) % pool.len()])
-            .min_by(|&a, &b| load(a).total_cmp(&load(b)))?; // first of equals: the rotation spreads ties
+        // Carry unused shares forward, including when connections finish between picks.
+        let total_capacity: f64 = pool.iter().map(|&i| s.slots[i].capacity()).sum();
+        for &i in &pool {
+            let slot = &mut s.slots[i];
+            slot.share_credit += slot.capacity() / total_capacity;
+        }
+        let i = (0..pool.len()).map(|k| pool[(start + k) % pool.len()])
+            .max_by(|&a, &b| s.slots[a].share_credit.total_cmp(&s.slots[b].share_credit))?;
         let sl = &mut s.slots[i];
+        sl.share_credit -= 1.0;
+        let disconnect = sl.disconnect.subscribe();
         sl.active += 1;
         sl.total += 1;
         let (adapter, meter) = (sl.adapter.clone(), sl.meter.clone());
         *s.apps.entry((app.to_string(), adapter.name.clone())).or_default() += 1;
-        Some(Lease { adapter, meter, app: app.to_string(), sched: self.clone() })
+        Some(Lease { adapter, meter, disconnect, app: app.to_string(), sched: self.clone() })
     }
 
     /// Called once a second: turns the byte counts into rates and updates each capacity estimate.
@@ -372,6 +389,9 @@ mod speed_tests {
         let leases: Vec<_> = (0..40).map(|_| s.acquire(&Route::new(), &[], "x").unwrap()).collect();
         let fast = leases.iter().filter(|l| l.adapter.name == "fast").count();
         assert_eq!(fast, 30, "3x the speed should get 3/4 of the flows");
+
+        let serial_fast = (0..40).filter(|_| s.acquire(&Route::new(), &[], "short").unwrap().adapter.name == "fast").count();
+        assert_eq!(serial_fast, 30, "short requests also use the slower adapter");
 
         // what a flow relays raises its adapter's estimate
         leases.iter().find(|l| l.adapter.name == "slow").unwrap().meter.rx.fetch_add(9_000_000, Ordering::Relaxed);

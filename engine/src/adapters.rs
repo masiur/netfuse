@@ -19,26 +19,24 @@ pub struct Adapter {
 /// Real hardware (enN; fethN is how TetherKit shows an Android USB tether) that is up, has an IPv4
 /// address and a router. Tunnels, VPNs, bridges and our own utun are left out, which also keeps
 /// our outbound sockets from looping back into the engine.
-pub fn discover() -> Vec<Adapter> {
-    let routers = interfaces_with_router();
-    let mut out: Vec<Adapter> = ipv4_addresses()
+pub fn discover(vpn: Option<&str>) -> Option<Vec<Adapter>> {
+    let routers = interfaces_with_router()?;
+    let mut out: Vec<Adapter> = ipv4_addresses()?
         .into_iter()
-        .filter(|(name, _, _)| is_hardware(name) && routers.contains(name))
-        .map(|(name, index, ip)| Adapter { name, index, ip })
+        .filter_map(|(name, index, ip)| {
+            if vpn == Some(name.as_str()) {
+                Some(Adapter { name: VPN.into(), index, ip })
+            } else if is_hardware(&name) && routers.contains(&name) {
+                Some(Adapter { name, index, ip })
+            } else {
+                None
+            }
+        })
         .chain(crate::phone::adapter()) // an Android phone the engine drives itself
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out.dedup_by(|a, b| a.name == b.name); // one address per adapter is enough
-    out
-}
-
-/// The connected VPN's tunnel as an adapter named "vpn", the name rules use for it, so a rule
-/// keeps working when the VPN comes back on another utun.
-pub fn vpn_adapter(utun: &str) -> Option<Adapter> {
-    ipv4_addresses()
-        .into_iter()
-        .find(|(name, _, _)| name == utun)
-        .map(|(_, index, ip)| Adapter { name: VPN.into(), index, ip })
+    Some(out)
 }
 
 pub const VPN: &str = "vpn";
@@ -49,11 +47,11 @@ pub fn is_hardware(name: &str) -> bool {
 }
 
 /// (name, index, address) of every up interface with a non-link-local IPv4 address.
-fn ipv4_addresses() -> Vec<(String, u32, Ipv4Addr)> {
+fn ipv4_addresses() -> Option<Vec<(String, u32, Ipv4Addr)>> {
     let mut out = Vec::new();
     let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
     if unsafe { libc::getifaddrs(&mut head) } != 0 {
-        return out;
+        return None;
     }
     let mut p = head;
     while !p.is_null() {
@@ -75,17 +73,17 @@ fn ipv4_addresses() -> Vec<(String, u32, Ipv4Addr)> {
         out.push((name, index, ip));
     }
     unsafe { libc::freeifaddrs(head) };
-    out
+    Some(out)
 }
 
 /// Interfaces whose network service has an IPv4 router. macOS keeps a scoped default route for
 /// each, so a socket bound to the interface (IP_BOUND_IF) reaches the internet through it.
-fn interfaces_with_router() -> HashSet<String> {
+fn interfaces_with_router() -> Option<HashSet<String>> {
     let mut out = HashSet::new();
-    let Some(store) = SCDynamicStoreBuilder::new("netfuse-engine").build() else { return out };
-    let Some(keys) = store.get_keys("State:/Network/Service/.*/IPv4") else { return out };
+    let store = SCDynamicStoreBuilder::new("netfuse-engine").build()?;
+    let keys = store.get_keys("State:/Network/Service/.*/IPv4")?;
     for key in keys.iter() {
-        let Some(dict) = store.get(key.clone()).and_then(|p| p.downcast_into::<CFDictionary>()) else { continue };
+        let dict = store.get(key.clone())?.downcast_into::<CFDictionary>()?;
         let get = |k: &str| -> Option<String> {
             let key = CFString::new(k);
             let v = dict.find(key.as_concrete_TypeRef() as *const c_void)?;
@@ -95,7 +93,7 @@ fn interfaces_with_router() -> HashSet<String> {
             out.insert(ifname);
         }
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -115,7 +113,7 @@ mod tests {
     #[test]
     fn finds_this_macs_internet_adapter() {
         // Whatever machine runs the tests has at least one way to the internet.
-        let a = discover();
+        let a = discover(None).unwrap();
         assert!(!a.is_empty(), "no adapters found");
         assert!(a.iter().all(|a| a.index > 0));
     }

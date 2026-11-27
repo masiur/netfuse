@@ -45,31 +45,37 @@ pub async fn tcp(mut client: IpStackTcpStream, st: Arc<State>) {
         result = dial_tcp(&st, &app, &route, dst, |a| tcp_connect(a, dst)) => result,
     };
     let Some((mut upstream, lease)) = connected else { return };
-    tokio::select! {
-        biased;
-        _ = &mut moved => return,
-        result = upstream.write_all(&first) => if result.is_err() { return; },
-    }
-    let (mut cr, mut cw) = tokio::io::split(client);
-    let (mut ur, mut uw) = upstream.into_split();
-    let meter = lease.meter.clone();
-    let up = async {
-        let _ = copy(&mut cr, &mut uw, &meter.tx).await;
-        let _ = uw.shutdown().await;
+    let mut disconnect = lease.disconnect.clone();
+    let disconnected = {
+        let forward = async {
+            if upstream.write_all(&first).await.is_err() { return; }
+            let (mut cr, mut cw) = tokio::io::split(&mut client);
+            let (mut ur, mut uw) = upstream.into_split();
+            let meter = lease.meter.clone();
+            let up = async {
+                let _ = copy(&mut cr, &mut uw, &meter.tx).await;
+                let _ = uw.shutdown().await;
+            };
+            let down = async {
+                let _ = copy(&mut ur, &mut cw, &meter.rx).await;
+                let _ = cw.shutdown().await;
+            };
+            tokio::pin!(up, down);
+            // The flow stops counting as busy at the first half-close: a finished request can wait a long
+            // time for the other side's FIN, and counting it would steer new flows away from that adapter.
+            tokio::select! {
+                _ = &mut up => { drop(lease); let _ = timeout(HALF_CLOSE_WAIT, down).await; }
+                _ = &mut down => { drop(lease); let _ = timeout(HALF_CLOSE_WAIT, up).await; }
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = disconnect.changed() => true,
+            _ = &mut moved => false,
+            _ = forward => false,
+        }
     };
-    let down = async {
-        let _ = copy(&mut ur, &mut cw, &meter.rx).await;
-        let _ = cw.shutdown().await;
-    };
-    tokio::pin!(up, down);
-    // The flow stops counting as busy at the first half-close: a finished request can wait a long
-    // time for the other side's FIN, and counting it would steer new flows away from that adapter.
-    tokio::select! {
-        _ = &mut up => { drop(lease); let _ = tokio::time::timeout(HALF_CLOSE_WAIT, down).await; }
-        _ = &mut down => { drop(lease); let _ = tokio::time::timeout(HALF_CLOSE_WAIT, up).await; }
-        // Its rule now says another route: close it, and the app reconnects through that route.
-        _ = &mut moved => {}
-    }
+    if disconnected { let _ = client.abort(); }
 }
 
 pub async fn udp(client: IpStackUdpStream, st: Arc<State>) {
@@ -107,16 +113,35 @@ where
     let mut probe_quic = dst.port() == 443;
     let mut pending_dns: Vec<(Instant, Vec<u8>)> = Vec::new();
     let mut replay_dns = dst.port() == 53;
+    let mut outstanding_dns = std::collections::HashMap::new();
     let mut retry_at: Option<Instant> = None;
     loop {
         let (from_backup, result) = tokio::select! {
             _ = &mut moved => break,
+            _ = primary.1.disconnect.changed() => {
+                if let Some(path) = backup.take() { primary = path; continue; }
+                break;
+            },
             r = client.read(&mut up) => match r {
                 Ok(n) if n > 0 => {
                     let payload = &up[..n];
-                    if replay_dns {
-                        if dns_query(payload) {
+                    if dst.port() == 53 {
+                        if payload.len() >= 12 && payload[2] & 0xf8 == 0 {
                             let now = Instant::now();
+                            outstanding_dns.retain(|_, sent| now.duration_since(*sent) < DNS_QUERY_LIFETIME);
+                            outstanding_dns.insert([payload[0], payload[1]], now);
+                        }
+                        replay_dns = dns_query(payload);
+                        if replay_dns {
+                            let now = Instant::now();
+                            if backup.is_none() {
+                                backup = tokio::select! {
+                                    biased;
+                                    _ = &mut moved => break,
+                                    path = dial(st, app, route, dst, &mut tried, &connect) => path,
+                                };
+                                if backup.is_some() { backup_down.resize(down.len(), 0); }
+                            }
                             pending_dns.retain(|(sent, query)| {
                                 now.duration_since(*sent) < DNS_QUERY_LIFETIME && query[..2] != payload[..2]
                             });
@@ -126,7 +151,6 @@ where
                             pending_dns.push((now, payload.to_vec()));
                         } else {
                             // For example, a DNS UPDATE must stay on one path.
-                            replay_dns = false;
                             pending_dns.clear();
                             retry_at = None;
                             backup = None;
@@ -205,19 +229,23 @@ where
         } else {
             None
         };
-        if from_backup {
-            // Ignore a duplicate DNS reply from the backup after the original answered it.
-            if replay_dns && answered.is_none() { continue; }
+        // Each outstanding transaction accepts exactly one standard reply, from either socket.
+        if dst.port() == 53 && payload.len() >= 12 && payload[2] & 0xf8 == 0x80
+            && outstanding_dns.remove(&[payload[0], payload[1]]).is_none() {
+            continue;
+        }
+        let received_on = if from_backup { backup.as_ref().unwrap() } else { &primary };
+        received_on.1.meter.rx.fetch_add(payload.len() as u64, Ordering::Relaxed);
+        if from_backup && (!replay_dns || outstanding_dns.is_empty()) {
             primary = backup.take().unwrap();
         }
-        primary.1.meter.rx.fetch_add(payload.len() as u64, Ordering::Relaxed);
         if client.write_all(payload).await.is_err() { break; }
 
         if replay_dns {
             if let Some(index) = answered {
                 pending_dns.remove(index);
             }
-            if pending_dns.is_empty() {
+            if outstanding_dns.is_empty() {
                 backup = None;
                 retry_at = None;
                 tried.clear();
@@ -316,7 +344,13 @@ where
     F: Fn(Adapter) -> Fut,
     Fut: Future<Output = io::Result<C>>,
 {
-    let error = match timeout(CONNECT_TIMEOUT, connect(lease.adapter.clone())).await {
+    let mut disconnect = lease.disconnect.clone();
+    let result = tokio::select! {
+        biased;
+        _ = disconnect.changed() => return Err(DialError::Retry),
+        result = timeout(CONNECT_TIMEOUT, connect(lease.adapter.clone())) => result,
+    };
+    let error = match result {
         Ok(Ok(connection)) => return Ok((connection, lease)),
         Ok(Err(error)) => error,
         Err(_) => io::Error::from(io::ErrorKind::TimedOut),
@@ -332,6 +366,7 @@ where
 /// (worth trying another adapter, this adapter's link is broken)
 fn classify(e: &io::Error) -> (bool, bool) {
     use io::ErrorKind::*;
+    if matches!(e.raw_os_error(), Some(libc::ENXIO | libc::ENODEV)) { return (true, true); }
     match e.kind() {
         NetworkUnreachable | NetworkDown | AddrNotAvailable => (true, true),
         HostUnreachable | TimedOut => (true, false),
@@ -461,6 +496,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disconnect_starts_the_next_tcp_attempt_immediately() {
+        let (st, route) = routes();
+        let started = tokio::sync::Notify::new();
+        let attempt = dial_tcp(&st, "", &route, "192.0.2.3:443".parse().unwrap(), |adapter| {
+            let started = &started;
+            async move {
+                if adapter.name == "en0" {
+                    started.notify_one();
+                    std::future::pending().await
+                } else { Ok(()) }
+            }
+        });
+        let unplug = async {
+            started.notified().await;
+            st.sched.update(vec![Adapter {
+                name: "en10".into(), index: 2, ip: "127.0.0.1".parse().unwrap(),
+            }]);
+        };
+        let (result, ()) = timeout(Duration::from_millis(200), async { tokio::join!(attempt, unplug) })
+            .await.expect("disconnect waited for the fallback timer");
+        assert_eq!(result.unwrap().1.adapter.name, "en10");
+    }
+
+    #[tokio::test]
     async fn two_silent_adapters_do_not_block_the_next_tcp_route() {
         let (st, _) = routes();
         st.sched.update(["en0", "en10", "en11"].into_iter().enumerate().map(|(i, name)| Adapter {
@@ -535,8 +594,12 @@ mod tests {
         reply[2] = 0x81;
         reply[3] = 0x83;
         let (_, from) = primary.recv_from(&mut received).await.unwrap();
+        let (_, late) = timeout(Duration::from_millis(300), backup.recv_from(&mut received)).await
+            .expect("fresh DNS was delayed").unwrap();
         primary.send_to(&reply, from).await.unwrap();
         udp_payload(&mut device, &reply).await;
+        backup.send_to(&reply, late).await.unwrap();
+        assert!(timeout(Duration::from_millis(50), device.read_u8()).await.is_err());
 
         query[1] += 1;
         reply[1] += 1;
@@ -558,8 +621,8 @@ mod tests {
         let mut query = *b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01";
         let (mut device, primary, backup, relay) = udp_fixture(53, &query).await;
         let mut received = [0; 128];
-        let (_, from) = primary.recv_from(&mut received).await.unwrap();
-        timeout(Duration::from_secs(3), backup.recv_from(&mut received)).await.unwrap().unwrap();
+        let (_, _from) = primary.recv_from(&mut received).await.unwrap();
+        let (_, backup_peer) = timeout(Duration::from_secs(3), backup.recv_from(&mut received)).await.unwrap().unwrap();
 
         let mut first_reply = query;
         first_reply[2] = 0x81;
@@ -568,7 +631,7 @@ mod tests {
         device.write_all(&datagram(53, &query)).await.unwrap();
         let (len, _) = timeout(Duration::from_secs(1), backup.recv_from(&mut received)).await.unwrap().unwrap();
         assert_eq!(&received[..len], query);
-        primary.send_to(&first_reply, from).await.unwrap();
+        backup.send_to(&first_reply, backup_peer).await.unwrap();
         udp_payload(&mut device, &first_reply).await;
 
         let (len, from) = timeout(Duration::from_secs(1), primary.recv_from(&mut received)).await

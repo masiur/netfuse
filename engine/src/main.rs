@@ -185,7 +185,7 @@ async fn main() {
     let rules_path = flag(&args, "--rules").unwrap_or_else(default_rules_path);
     match args.first().map(String::as_str) {
         Some("list") => {
-            for a in adapters::discover() {
+            for a in adapters::discover(None).unwrap_or_default() {
                 println!("{:<8} {:<16} index {}", a.name, a.ip, a.index);
             }
         }
@@ -234,7 +234,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
     let st = Arc::new(State { sched: Arc::new(Scheduler::default()), rules: RwLock::new(Rules::default()), rules_gen: tokio::sync::watch::Sender::new(0) });
     st.sched.set_disabled(rules.disabled.clone());
     *st.rules.write().unwrap() = rules;
-    let found = adapters::discover();
+    let found = adapters::discover(None).ok_or_else(|| std::io::Error::other("cannot read network interfaces"))?;
     if found.is_empty() {
         return Err(std::io::Error::other("no adapter with internet found"));
     }
@@ -264,7 +264,7 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
     if let Some(dir) = status_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // Background: adapter re-scan every 3 s, rules reload on change, status every second.
+    // Background: adapter re-scan every second, rules reload on change, status every second.
     let bg = st.clone();
     let tun_name = name.clone();
     let status_for_bg = status_path.clone();
@@ -305,16 +305,16 @@ async fn run(rules_path: PathBuf, status_path: PathBuf, limit: Option<Duration>,
                 off.notify_one();
                 return;
             }
-            if tick % 3 == 0 {
-                let mut found = adapters::discover();
-                if let (Some(v), false) = (&vpn, aside) {
-                    if let Some(a) = adapters::vpn_adapter(v) {
-                        scoped::tunnel_default(v);
-                        found.push(a);
-                    }
+            let active_vpn = vpn.as_deref().filter(|_| !aside);
+            let found = adapters::discover(active_vpn);
+            if let Some(adapters) = &found {
+                if let Some(v) = active_vpn {
+                    scoped::tunnel_default(v);
                 }
-                bg.sched.update(found.clone());
-                for a in found {
+                bg.sched.update(adapters.clone());
+            }
+            if tick % 3 == 0 {
+                for a in found.unwrap_or_default() {
                     let key = speedtest::key(&a);
                     if !tested.insert(key.clone()) {
                         continue;

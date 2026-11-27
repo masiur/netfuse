@@ -449,6 +449,16 @@ impl Drop for IpStackTcpStream {
 }
 
 impl IpStackTcpStream {
+    /// Tell the local peer its upstream connection was lost.
+    pub fn abort(&mut self) -> std::io::Result<()> {
+        let mut tcb = self.tcb.lock().unwrap();
+        if tcb.get_state() != TcpState::Closed {
+            write_packet_to_device(&self.up_packet_sender, self.network_tuple(), &tcb, None, ACK | RST, None, None)?;
+            tcb.change_state(TcpState::Closed);
+        }
+        Ok(())
+    }
+
     fn spawn_tasks(&mut self) -> std::io::Result<()> {
         let network_tuple = self.network_tuple();
 
