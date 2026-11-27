@@ -4,6 +4,18 @@ Use all your Mac's internet connections at once: Wi-Fi, Ethernet, an iPhone or A
 USB, and USB network adapters. Connections are shared out by speed, and you choose per app which
 connection it uses.
 
+<p align="center">
+  <img src="docs/screenshots/menu.png" width="380" alt="Netfuse menu: connections combined, with on/off switch">
+</p>
+
+| Site routes | App routes |
+| --- | --- |
+| ![Site routes: send a site through one connection, with one-click popular sites](docs/screenshots/sites.png) | ![App routes: choose the connection each app uses](docs/screenshots/routes.png) |
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" width="600" alt="Settings">
+</p>
+
 ## Install
 
 Apple Silicon, macOS 14 or later:

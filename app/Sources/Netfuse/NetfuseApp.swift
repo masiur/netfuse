@@ -19,7 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `--window` also shows the menu's content in a normal window (`--details`: the details
     /// window's): easier to look at and debug than a menu-bar popover. `--snapshot out.png
     /// [--delay SECONDS]` renders that window to a file after a few seconds of live data, then
-    /// quits (for checking the layout without screen-recording rights).
+    /// quits (for checking the layout without screen-recording rights). `--page NAME` picks the
+    /// details page.
     @MainActor
     func applicationDidFinishLaunching(_ note: Notification) {
         AdapterMonitor.shared.start()
@@ -43,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        if let page = value("--page") { DetailsFocus.shared.selection = page } // overview, sites, routes, latency, settings, or en0
         let root = details ? AnyView(DetailsView().frame(width: 940, height: 1100)) : AnyView(MenuView())
         let w = NSWindow(contentViewController: NSHostingController(rootView: root))
         w.title = "Netfuse"
