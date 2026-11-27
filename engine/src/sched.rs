@@ -51,6 +51,11 @@ pub fn route_text(r: &Route) -> String {
 /// Until measured, an adapter counts as this fast (1 Mbit/s), so it still gets some flows.
 const FLOOR: f64 = 125_000.0;
 const HALF_LIFE_SECS: f64 = 600.0;
+/// Every adapter in a tier weighs at least this share of the fastest one's capacity. Capacity is
+/// measured from what an adapter carries, so without it a link that gets few flows measures slow
+/// and keeps getting few: it never shows its real speed. ponytail: fixed fraction; a periodic
+/// re-test of idle links would let a truly slow one drop lower.
+const MIN_SHARE: f64 = 0.25;
 
 /// Bytes relayed through one adapter; the flows on it add to it.
 #[derive(Default)]
@@ -224,10 +229,12 @@ impl Scheduler {
         s.turn = s.turn.wrapping_add(1);
         let start = s.turn % pool.len();
         // Carry unused shares forward, including when connections finish between picks.
-        let total_capacity: f64 = pool.iter().map(|&i| s.slots[i].capacity()).sum();
+        let fastest = pool.iter().map(|&i| s.slots[i].capacity()).fold(0.0, f64::max);
+        let weight = |sl: &Slot| sl.capacity().max(fastest * MIN_SHARE);
+        let total: f64 = pool.iter().map(|&i| weight(&s.slots[i])).sum();
         for &i in &pool {
-            let slot = &mut s.slots[i];
-            slot.share_credit += slot.capacity() / total_capacity;
+            let w = weight(&s.slots[i]) / total;
+            s.slots[i].share_credit += w;
         }
         let i = (0..pool.len()).map(|k| pool[(start + k) % pool.len()])
             .max_by(|&a, &b| s.slots[a].share_credit.total_cmp(&s.slots[b].share_credit))?;
@@ -307,6 +314,16 @@ mod tests {
 
     fn ad(name: &str, last: u8) -> Adapter {
         Adapter { name: name.into(), index: 1, ip: [10, 0, 0, last].into() }
+    }
+
+    #[test]
+    fn an_unmeasured_adapter_still_gets_flows() {
+        let s = Arc::new(Scheduler::default());
+        s.update(vec![ad("en0", 1), ad("en4", 2)]);
+        s.tested("en0", 100.0 * FLOOR); // en4 never measured: FLOOR, 1% of en0
+        let leases: Vec<_> = (0..100).map(|_| s.acquire(&Route::new(), &[], "a").unwrap()).collect();
+        let en4 = leases.iter().filter(|l| l.adapter.name == "en4").count();
+        assert!((15..=25).contains(&en4), "en4 got {en4} of 100");
     }
 
     #[test]
